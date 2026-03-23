@@ -1,0 +1,131 @@
+# File: api-gateway.yml (in GitHub config repo root)
+
+server:
+  port: 7003
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+
+        # ── Auth Service (public) ─────────────────────────────────────────────
+        - id: auth-service
+          uri: lb://auth-service
+          predicates:
+            - Path=/auth/**
+
+        # ── Application Service (secured) ─────────────────────────────────────
+        - id: application-service
+          uri: lb://application-service
+          predicates:
+            - Path=/applications/**
+          filters:
+            - name: AuthenticationFilter
+
+        # ── Document Service (secured) ─────────────────────────────────────────
+        - id: document-service
+          uri: lb://document-service
+          predicates:
+            - Path=/documents/**
+          filters:
+            - name: AuthenticationFilter
+
+        # ── Admin Service (secured) ────────────────────────────────────────────
+        - id: admin-service
+          uri: lb://admin-service
+          predicates:
+            - Path=/admin/**
+          filters:
+            - name: AuthenticationFilter
+
+        # ── Auth Service Swagger (public) ─────────────────────────────────────
+        - id: auth-service-swagger-ui
+          uri: lb://auth-service
+          predicates:
+            - Path=/auth-service/swagger-ui.html, /auth-service/swagger-ui/**
+          filters:
+            - RewritePath=/auth-service/(?<segment>.*), /$\{segment}
+
+        - id: auth-service-api-docs
+          uri: lb://auth-service
+          predicates:
+            - Path=/auth-service/v3/api-docs/**
+          filters:
+            - RewritePath=/auth-service/(?<segment>.*), /$\{segment}
+
+        # ── Application Service Swagger (public) ──────────────────────────────
+        - id: application-service-swagger-ui
+          uri: lb://application-service
+          predicates:
+            - Path=/application-service/swagger-ui.html, /application-service/swagger-ui/**
+          filters:
+            - RewritePath=/application-service/(?<segment>.*), /$\{segment}
+
+        - id: application-service-api-docs
+          uri: lb://application-service
+          predicates:
+            - Path=/application-service/v3/api-docs/**
+          filters:
+            - RewritePath=/application-service/(?<segment>.*), /$\{segment}
+
+        # ── Document Service Swagger (public) ─────────────────────────────────
+        - id: document-service-swagger-ui
+          uri: lb://document-service
+          predicates:
+            - Path=/document-service/swagger-ui.html, /document-service/swagger-ui/**
+          filters:
+            - RewritePath=/document-service/(?<segment>.*), /$\{segment}
+
+        - id: document-service-api-docs
+          uri: lb://document-service
+          predicates:
+            - Path=/document-service/v3/api-docs/**
+          filters:
+            - RewritePath=/document-service/(?<segment>.*), /$\{segment}
+
+        # ── Admin Service Swagger (public) ────────────────────────────────────
+        - id: admin-service-swagger-ui
+          uri: lb://admin-service
+          predicates:
+            - Path=/admin-service/swagger-ui.html, /admin-service/swagger-ui/**
+          filters:
+            - RewritePath=/admin-service/(?<segment>.*), /$\{segment}
+
+        - id: admin-service-api-docs
+          uri: lb://admin-service
+          predicates:
+            - Path=/admin-service/v3/api-docs/**
+          filters:
+            - RewritePath=/admin-service/(?<segment>.*), /$\{segment}
+
+jwt:
+  secret: finflow_super_secret_key_256_bits_long_for_HS256_2026
+  expiration: 86400000
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    urls:
+      - name: Auth Service
+        url: /auth-service/v3/api-docs
+      - name: Application Service
+        url: /application-service/v3/api-docs
+      - name: Document Service
+        url: /document-service/v3/api-docs
+      - name: Admin Service
+        url: /admin-service/v3/api-docs
+    persist-authorization: true
+
+info:
+  app:
+    name: FinFlow API Gateway
+    description: Central entry point, JWT validation and routing
+    version: 1.0.0

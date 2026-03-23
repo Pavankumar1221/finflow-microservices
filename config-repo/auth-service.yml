@@ -1,0 +1,34 @@
+# File: auth-service.yml (in GitHub config repo root)
+
+server:
+  port: 7004
+
+spring:
+  application:
+    name: auth-service
+  datasource:
+    url: jdbc:mysql://localhost:3306/finflow_auth?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true
+    username: pavan
+    password: Pavan@2004
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+jwt:
+  secret: finflow_super_secret_key_256_bits_long_for_HS256_2026
+  expiration: 86400000
+
+info:
+  app:
+    name: FinFlow Auth Service
+    description: Handles user registration, login and JWT token management
+    version: 1.0.0

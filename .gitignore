@@ -1,0 +1,22 @@
+# IDE files
+.metadata/
+.project
+.settings/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Build
+target/
+build/
+
+# Node (if frontend later)
+node_modules/
+
+# Environment
+.env

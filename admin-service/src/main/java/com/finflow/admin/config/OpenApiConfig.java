@@ -1,0 +1,37 @@
+package com.finflow.admin.config;
+
+import io.swagger.v3.oas.models.Components;
+import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.security.SecurityRequirement;
+import io.swagger.v3.oas.models.security.SecurityScheme;
+import io.swagger.v3.oas.models.servers.Server;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class OpenApiConfig {
+
+    @Bean
+    public OpenAPI adminServiceOpenAPI() {
+        // Force Swagger UI to send calls through the API Gateway, not directly
+        // to this service. All admin endpoints are at /admin/** on the gateway.
+        Server gatewayServer = new Server()
+                .url("http://localhost:7003")
+                .description("API Gateway (Production Entry Point)");
+
+        return new OpenAPI()
+                .addServersItem(gatewayServer)
+                .info(new Info()
+                        .title("FinFlow - Admin Service API")
+                        .version("1.0.0")
+                        .description("Admin review, approval/rejection decisions, document verification and audit"))
+                .addSecurityItem(new SecurityRequirement().addList("Bearer Auth"))
+                .components(new Components()
+                        .addSecuritySchemes("Bearer Auth",
+                                new SecurityScheme()
+                                        .type(SecurityScheme.Type.HTTP)
+                                        .scheme("bearer")
+                                        .bearerFormat("JWT")));
+    }
+}

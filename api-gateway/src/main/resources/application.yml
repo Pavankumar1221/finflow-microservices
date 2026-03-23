@@ -1,0 +1,172 @@
+server:
+  port: 7003
+
+spring:
+  application:
+    name: api-gateway
+  config:
+    import: "optional:configserver:http://localhost:7001"
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+
+        # ════════════════════════════════════════════════════════════════
+        # AUTH SERVICE  (all public — no AuthenticationFilter)
+        # ════════════════════════════════════════════════════════════════
+        - id: auth-service
+          uri: lb://auth-service
+          predicates:
+            - Path=/auth/**
+
+        # ════════════════════════════════════════════════════════════════
+        # APPLICATION SERVICE  — secured API routes
+        # ════════════════════════════════════════════════════════════════
+        - id: application-service
+          uri: lb://application-service
+          predicates:
+            - Path=/applications/**
+          filters:
+            - name: AuthenticationFilter
+
+        # ════════════════════════════════════════════════════════════════
+        # DOCUMENT SERVICE  — secured API routes
+        # ════════════════════════════════════════════════════════════════
+        - id: document-service
+          uri: lb://document-service
+          predicates:
+            - Path=/documents/**
+          filters:
+            - name: AuthenticationFilter
+
+        # ════════════════════════════════════════════════════════════════
+        # ADMIN SERVICE  — secured API routes
+        # ════════════════════════════════════════════════════════════════
+        - id: admin-service
+          uri: lb://admin-service
+          predicates:
+            - Path=/admin/**
+          filters:
+            - name: AuthenticationFilter
+
+        # ════════════════════════════════════════════════════════════════
+        # SWAGGER / OpenAPI ROUTES  (PUBLIC — no JWT required)
+        # Access via: http://localhost:7003/{service-name}/swagger-ui.html
+        # ════════════════════════════════════════════════════════════════
+
+        # AUTH SERVICE swagger
+        - id: auth-service-swagger-ui
+          uri: lb://auth-service
+          predicates:
+            - Path=/auth-service/swagger-ui.html, /auth-service/swagger-ui/**
+          filters:
+            - RewritePath=/auth-service/(?<segment>.*), /$\{segment}
+
+        - id: auth-service-api-docs
+          uri: lb://auth-service
+          predicates:
+            - Path=/auth-service/v3/api-docs/**
+          filters:
+            - RewritePath=/auth-service/(?<segment>.*), /$\{segment}
+
+        # APPLICATION SERVICE swagger
+        - id: application-service-swagger-ui
+          uri: lb://application-service
+          predicates:
+            - Path=/application-service/swagger-ui.html, /application-service/swagger-ui/**
+          filters:
+            - RewritePath=/application-service/(?<segment>.*), /$\{segment}
+
+        - id: application-service-api-docs
+          uri: lb://application-service
+          predicates:
+            - Path=/application-service/v3/api-docs/**
+          filters:
+            - RewritePath=/application-service/(?<segment>.*), /$\{segment}
+
+        # DOCUMENT SERVICE swagger
+        - id: document-service-swagger-ui
+          uri: lb://document-service
+          predicates:
+            - Path=/document-service/swagger-ui.html, /document-service/swagger-ui/**
+          filters:
+            - RewritePath=/document-service/(?<segment>.*), /$\{segment}
+
+        - id: document-service-api-docs
+          uri: lb://document-service
+          predicates:
+            - Path=/document-service/v3/api-docs/**
+          filters:
+            - RewritePath=/document-service/(?<segment>.*), /$\{segment}
+
+        # ADMIN SERVICE swagger
+        - id: admin-service-swagger-ui
+          uri: lb://admin-service
+          predicates:
+            - Path=/admin-service/swagger-ui.html, /admin-service/swagger-ui/**
+          filters:
+            - RewritePath=/admin-service/(?<segment>.*), /$\{segment}
+
+        - id: admin-service-api-docs
+          uri: lb://admin-service
+          predicates:
+            - Path=/admin-service/v3/api-docs/**
+          filters:
+            - RewritePath=/admin-service/(?<segment>.*), /$\{segment}
+
+        # ════════════════════════════════════════════════════════════════
+        # GATEWAY'S OWN Swagger UI  (aggregated view)
+        # ════════════════════════════════════════════════════════════════
+        # Springdoc will serve /swagger-ui.html and /v3/api-docs for the
+        # gateway itself — no route needed, it's served locally.
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:7002/eureka/
+  instance:
+    prefer-ip-address: true
+
+jwt:
+  secret: finflow_super_secret_key_256_bits_long_for_HS256_2026
+  expiration: 86400000
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SpringDoc — Aggregated Swagger UI served AT the gateway itself
+# Accessible at: http://localhost:7003/swagger-ui.html
+# It pulls /v3/api-docs from each downstream service via the routes above.
+# ──────────────────────────────────────────────────────────────────────────────
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    # List every service's OpenAPI docs URL (routed through gateway)
+    urls:
+      - name: Auth Service
+        url: /auth-service/v3/api-docs
+      - name: Application Service
+        url: /application-service/v3/api-docs
+      - name: Document Service
+        url: /document-service/v3/api-docs
+      - name: Admin Service
+        url: /admin-service/v3/api-docs
+    # Allow the "Authorize" button in aggregated Swagger to persist across tabs
+    persist-authorization: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,gateway
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO
+    com.finflow.gateway: DEBUG

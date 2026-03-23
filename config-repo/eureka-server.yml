@@ -1,0 +1,26 @@
+# File: eureka-server.yml (in GitHub config repo root)
+
+server:
+  port: 7002
+
+spring:
+  application:
+    name: eureka-server
+
+eureka:
+  instance:
+    hostname: localhost
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: http://localhost:7002/eureka/
+  server:
+    enable-self-preservation: false
+    eviction-interval-timer-in-ms: 5000
+
+info:
+  app:
+    name: FinFlow Eureka Server
+    description: Service registry and discovery
+    version: 1.0.0

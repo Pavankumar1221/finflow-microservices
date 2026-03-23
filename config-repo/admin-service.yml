@@ -1,0 +1,39 @@
+# File: admin-service.yml (in GitHub config repo root)
+
+server:
+  port: 7007
+
+spring:
+  application:
+    name: admin-service
+  datasource:
+    url: jdbc:mysql://localhost:3306/finflow_admin?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true
+    username: pavan
+    password: Pavan@2004
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+
+feign:
+  client:
+    config:
+      default:
+        connectTimeout: 5000
+        readTimeout: 5000
+        loggerLevel: BASIC
+  circuitbreaker:
+    enabled: true
+
+info:
+  app:
+    name: FinFlow Admin Service
+    description: Admin review, loan decisions, document verification and audit
+    version: 1.0.0

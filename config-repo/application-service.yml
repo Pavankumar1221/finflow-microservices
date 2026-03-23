@@ -1,0 +1,33 @@
+# File: application-service.yml (in GitHub config repo root)
+
+server:
+  port: 7005
+
+spring:
+  application:
+    name: application-service
+  datasource:
+    url: jdbc:mysql://localhost:3306/finflow_application?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true
+    username: pavan
+    password: Pavan@2004
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+
+rabbitmq:
+  exchange: application.exchange
+  routing-key: application.submitted
+
+info:
+  app:
+    name: FinFlow Application Service
+    description: Manages loan application lifecycle from draft to submission
+    version: 1.0.0

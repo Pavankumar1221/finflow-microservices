@@ -1,0 +1,18 @@
+# FinFlow Config Repo — Files to push to: https://github.com/Pavankumar1221/finflow-config-repo.git
+#
+# FOLDER STRUCTURE IN GITHUB REPO:
+# ─────────────────────────────────
+# finflow-config-repo/
+# ├── application.yml          ← shared by ALL services
+# ├── auth-service.yml
+# ├── application-service.yml
+# ├── document-service.yml
+# ├── admin-service.yml
+# ├── api-gateway.yml
+# └── eureka-server.yml
+#
+# HOW TO PUSH:
+# git clone https://github.com/Pavankumar1221/finflow-config-repo.git
+# cd finflow-config-repo
+# Copy all .yml files from this config-repo/ folder into the root of the cloned repo
+# git add . && git commit -m "Add configs" && git push
