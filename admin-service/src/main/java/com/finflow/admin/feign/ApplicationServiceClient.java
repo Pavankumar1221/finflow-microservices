@@ -30,4 +30,7 @@ public interface ApplicationServiceClient {
                                    @RequestParam String remarks,
                                    @RequestHeader("X-User-Id") String userId,
                                    @RequestHeader("X-User-Roles") String roles);
+
+    @GetMapping("/internal/reports")
+    Map<String, Object> getReports(@RequestHeader("X-Internal-Call") String internalCallHeader);
 }

@@ -1,6 +1,7 @@
 package com.finflow.admin.controller;
 
 import com.finflow.admin.dto.*;
+import com.finflow.admin.feign.AuthServiceClient;
 import com.finflow.admin.mapper.AdminMapper;
 import com.finflow.admin.service.AdminService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -12,6 +13,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -20,11 +22,13 @@ import java.util.Map;
 @RestController
 @RequestMapping("/admin")
 @RequiredArgsConstructor
+@PreAuthorize("hasRole('ADMIN')")
 @Tag(name = "Admin Controller", description = "Application review, decisions, document verification and audit")
 public class AdminController {
 
     private final AdminService adminService;
     private final AdminMapper mapper;
+    private final AuthServiceClient authServiceClient;
 
     // ─── Applications ─────────────────────────────────────────────────────────
 
@@ -73,6 +77,52 @@ public class AdminController {
     @Operation(summary = "Get decision for a specific application")
     public ResponseEntity<DecisionResponse> getDecision(@PathVariable Long id) {
         return ResponseEntity.ok(mapper.toResponse(adminService.getDecisionByApplication(id)));
+    }
+
+    @PostMapping("/applications/{id}/decision")
+    @Operation(summary = "Make a unified decision (Approve/Reject)")
+    public ResponseEntity<DecisionResponse> makeDecision(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> request,
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long adminId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
+        
+        String decisionStr = (String) request.get("decision");
+        String remarks = (String) request.get("remarks");
+
+        if ("APPROVED".equalsIgnoreCase(decisionStr)) {
+            ApproveRequest approveReq = new ApproveRequest();
+            approveReq.setDecisionReason(remarks);
+            // Setting some safe defaults if required by ApproveRequest validation
+            if (approveReq.getApprovedAmount() == null) approveReq.setApprovedAmount(java.math.BigDecimal.ZERO);
+            if (approveReq.getApprovedTenureMonths() == null) approveReq.setApprovedTenureMonths(0);
+            if (approveReq.getInterestRate() == null) approveReq.setInterestRate(java.math.BigDecimal.ZERO);
+            return ResponseEntity.ok(mapper.toResponse(
+                    adminService.approveApplication(id, adminId, approveReq, roles)));
+        } else if ("REJECTED".equalsIgnoreCase(decisionStr)) {
+            RejectRequest rejectReq = new RejectRequest();
+            rejectReq.setDecisionReason(remarks);
+            return ResponseEntity.ok(mapper.toResponse(
+                    adminService.rejectApplication(id, adminId, rejectReq, roles)));
+        } else {
+            throw new IllegalArgumentException("Invalid decision: " + decisionStr);
+        }
+    }
+
+    // ─── User Management ──────────────────────────────────────────────────────
+
+    @GetMapping("/users")
+    @Operation(summary = "Get all users with roles and details")
+    public ResponseEntity<List<Map<String, Object>>> getAllUsers() {
+        return ResponseEntity.ok(authServiceClient.getAllUsers("admin-service"));
+    }
+
+    @PutMapping("/users/{id}")
+    @Operation(summary = "Update user role or status")
+    public ResponseEntity<Map<String, Object>> updateUser(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> updateRequest) {
+        return ResponseEntity.ok(authServiceClient.updateUser(id, updateRequest, "admin-service"));
     }
 
     // ─── Document verification ────────────────────────────────────────────────

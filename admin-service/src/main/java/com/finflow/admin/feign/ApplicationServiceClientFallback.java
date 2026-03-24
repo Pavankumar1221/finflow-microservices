@@ -34,4 +34,10 @@ public class ApplicationServiceClientFallback implements ApplicationServiceClien
         log.warn("Fallback: Could not update application status {}", id);
         return Map.of("error", "Application service unavailable");
     }
+
+    @Override
+    public Map<String, Object> getReports(String internalCallHeader) {
+        log.warn("Fallback: Could not fetch reports");
+        return Map.of("error", "Application service unavailable");
+    }
 }

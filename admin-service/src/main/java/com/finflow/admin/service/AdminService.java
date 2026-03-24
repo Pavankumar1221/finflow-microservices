@@ -55,6 +55,41 @@ public class AdminService {
     // ─── Decisions ────────────────────────────────────────────────────────────
 
     public Decision approveApplication(Long applicationId, Long adminId, ApproveRequest request, String roles) {
+        if (roles == null || !roles.contains("ROLE_ADMIN")) {
+            throw new RuntimeException("Access Denied: Only ADMIN can perform this action");
+        }
+        if (request == null) {
+            throw new IllegalArgumentException("Approve request cannot be null");
+        }
+        if (request.getApprovedAmount() == null || request.getApprovedAmount().compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Invalid approval amount");
+        }
+
+        try {
+            applicationClient.getApplication(applicationId, String.valueOf(adminId), roles);
+        } catch (feign.FeignException e) {
+            throw new RuntimeException("Failed to fetch application or application not found", e);
+        }
+
+        try {
+            List<Object> docs = documentClient.getDocumentsByApplication(applicationId, String.valueOf(adminId), roles);
+            boolean allVerified = docs != null && !docs.isEmpty();
+            if (docs != null) {
+                for (Object docObj : docs) {
+                    Map<String, Object> doc = (Map<String, Object>) docObj;
+                    if (!"VERIFIED".equals(doc.get("status"))) {
+                        allVerified = false;
+                        break;
+                    }
+                }
+            }
+            if (!allVerified) {
+                throw new RuntimeException("Cannot approve: All documents must be VERIFIED");
+            }
+        } catch (feign.FeignException e) {
+            throw new RuntimeException("Failed to fetch documents for application", e);
+        }
+
         if (decisionRepository.existsByApplicationId(applicationId)) {
             throw new RuntimeException("Decision already exists for application: " + applicationId);
         }
@@ -84,6 +119,19 @@ public class AdminService {
     }
 
     public Decision rejectApplication(Long applicationId, Long adminId, RejectRequest request, String roles) {
+        if (roles == null || !roles.contains("ROLE_ADMIN")) {
+            throw new RuntimeException("Access Denied: Only ADMIN can perform this action");
+        }
+        if (request == null) {
+            throw new IllegalArgumentException("Reject request cannot be null");
+        }
+
+        try {
+            applicationClient.getApplication(applicationId, String.valueOf(adminId), roles);
+        } catch (feign.FeignException e) {
+            throw new RuntimeException("Failed to fetch application or application not found", e);
+        }
+
         if (decisionRepository.existsByApplicationId(applicationId)) {
             throw new RuntimeException("Decision already exists for application: " + applicationId);
         }
