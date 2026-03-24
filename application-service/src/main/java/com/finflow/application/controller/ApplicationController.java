@@ -10,9 +10,11 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/applications")
@@ -24,6 +26,7 @@ public class ApplicationController {
     private final ApplicationMapper mapper;
 
     @PostMapping("/draft")
+    @PreAuthorize("hasRole('APPLICANT')")
     @Operation(summary = "Create a draft loan application")
     public ResponseEntity<LoanApplicationResponse> createDraft(
             @Parameter(hidden = true) @RequestHeader("X-User-Id") Long applicantId) {
@@ -32,6 +35,7 @@ public class ApplicationController {
     }
 
     @PutMapping("/{id}/personal")
+    @PreAuthorize("hasRole('APPLICANT')")
     @Operation(summary = "Save personal details")
     public ResponseEntity<PersonalDetailsResponse> savePersonal(
             @PathVariable Long id, @RequestBody ApplicantPersonalDetails details) {
@@ -39,6 +43,7 @@ public class ApplicationController {
     }
 
     @PutMapping("/{id}/employment")
+    @PreAuthorize("hasRole('APPLICANT')")
     @Operation(summary = "Save employment details")
     public ResponseEntity<EmploymentDetailsResponse> saveEmployment(
             @PathVariable Long id, @RequestBody EmploymentDetails details) {
@@ -46,6 +51,7 @@ public class ApplicationController {
     }
 
     @PutMapping("/{id}/loan-details")
+    @PreAuthorize("hasRole('APPLICANT')")
     @Operation(summary = "Save loan details")
     public ResponseEntity<LoanDetailsResponse> saveLoanDetails(
             @PathVariable Long id, @RequestBody LoanDetails details) {
@@ -53,6 +59,7 @@ public class ApplicationController {
     }
 
     @PostMapping("/{id}/submit")
+    @PreAuthorize("hasRole('APPLICANT')")
     @Operation(summary = "Submit a draft application (triggers RabbitMQ event)")
     public ResponseEntity<LoanApplicationResponse> submit(
             @PathVariable Long id,
@@ -79,6 +86,7 @@ public class ApplicationController {
     }
 
     @GetMapping("/my")
+    @PreAuthorize("hasRole('APPLICANT')")
     @Operation(summary = "Get all applications for logged-in user")
     public ResponseEntity<List<LoanApplicationResponse>> getMyApplications(
             @Parameter(hidden = true) @RequestHeader("X-User-Id") Long applicantId) {
@@ -102,5 +110,20 @@ public class ApplicationController {
             @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
         return ResponseEntity.ok(mapper.toResponse(
                 applicationService.updateStatus(id, toStatus, userId, roles, remarks)));
+    }
+
+    @GetMapping("/internal/reports")
+    @Operation(summary = "Get aggregated internal reports", hidden = true)
+    public ResponseEntity<Map<String, Object>> getReports(
+            @RequestHeader(value = "X-Internal-Call", required = false) String internalCall,
+            @RequestHeader(value = "X-Forwarded-Host", required = false) String forwardedHost) {
+        
+        if (forwardedHost != null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build(); // Block external Gateway requests
+        }
+        if (!"admin-service".equals(internalCall)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        return ResponseEntity.ok(applicationService.getReports());
     }
 }

@@ -23,6 +23,11 @@ public class ApplicationDecisionListener {
     @RabbitListener(queues = "application.decision.queue")
     @Transactional
     public void handleDecision(ApplicationDecisionEvent event) {
+        if (event == null || event.getApplicationId() == null) {
+            log.warn("Received null or malformed ApplicationDecisionEvent");
+            return;
+        }
+
         Long appId = event.getApplicationId();
         LoanApplication app = applicationRepo.findById(appId).orElse(null);
         if (app == null) {
@@ -37,8 +42,16 @@ public class ApplicationDecisionListener {
             return;
         }
 
+        ApplicationStatus targetStatus;
+        try {
+            targetStatus = ApplicationStatus.valueOf(event.getStatus());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            log.warn("Received invalid status '{}' for application: {}", event.getStatus(), appId);
+            return;
+        }
+
         String from = current.name();
-        app.setStatus(ApplicationStatus.valueOf(event.getStatus()));
+        app.setStatus(targetStatus);
         applicationRepo.save(app);
 
         historyRepo.save(ApplicationStatusHistory.builder()
