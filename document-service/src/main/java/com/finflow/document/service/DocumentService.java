@@ -205,8 +205,23 @@ public class DocumentService {
     }
 
     public Document updateInternalStatus(Long documentId, String statusStr, String remarks, Long verifiedBy) {
+        if (documentId == null || statusStr == null) {
+            throw new IllegalArgumentException("Document ID and status cannot be null");
+        }
+
         Document doc = getDocumentById(documentId);
-        VerificationStatus status = VerificationStatus.valueOf(statusStr.toUpperCase());
+
+        VerificationStatus status;
+        try {
+            status = VerificationStatus.valueOf(statusStr.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid status: " + statusStr);
+        }
+
+        if (doc.getVerificationStatus() == status) {
+            log.info("Document {} is already {}. Skipping duplicate update.", documentId, status);
+            return doc;
+        }
         
         doc.setVerificationStatus(status);
         doc.setVerifiedAt(LocalDateTime.now());

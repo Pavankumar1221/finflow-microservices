@@ -16,6 +16,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -38,6 +39,7 @@ public class DocumentController {
     // ────────────────────────────────────────────────────────────────────────────
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('APPLICANT')")
     @Operation(summary = "Upload a document for a loan application")
     public ResponseEntity<DocumentResponse> uploadDocument(
             @RequestParam Long applicationId,
@@ -55,6 +57,7 @@ public class DocumentController {
     // ────────────────────────────────────────────────────────────────────────────
 
     @GetMapping("/application/{applicationId}")
+    @PreAuthorize("hasAnyRole('APPLICANT', 'ADMIN')")
     @Operation(summary = "Get all documents for an application")
     public ResponseEntity<List<DocumentResponse>> getDocumentsByApplication(
             @PathVariable Long applicationId,
@@ -65,6 +68,7 @@ public class DocumentController {
     }
 
     @GetMapping("/required/{applicationId}")
+    @PreAuthorize("hasAnyRole('APPLICANT', 'ADMIN')")
     @Operation(summary = "Get required, uploaded, and pending document types")
     public ResponseEntity<Map<String, List<String>>> getRequiredDocuments(
             @PathVariable Long applicationId,
@@ -74,6 +78,7 @@ public class DocumentController {
     }
 
     @GetMapping("/{id}")
+    @PreAuthorize("hasAnyRole('APPLICANT', 'ADMIN')")
     @Operation(summary = "Get a specific document's metadata by ID")
     public ResponseEntity<DocumentResponse> getDocument(
             @PathVariable Long id,
@@ -170,6 +175,7 @@ public class DocumentController {
     // ────────────────────────────────────────────────────────────────────────────
 
     @GetMapping("/{id}/history")
+    @PreAuthorize("hasAnyRole('APPLICANT', 'ADMIN')")
     @Operation(summary = "Get verification history for a document")
     public ResponseEntity<List<VerificationHistoryResponse>> getVerificationHistory(
             @PathVariable Long id,
