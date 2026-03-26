@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Debug Logback initialization -->
+    <statusListener class="ch.qos.logback.core.status.OnConsoleStatusListener"/>
+
+    <!-- Application Name -->
+    <property name="APP_NAME" value="admin-service"/>
+
+    <!-- ───────── Console Appender ───────── -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) [%cyan(${APP_NAME})] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ───────── Loki Appender (DIRECT URL) ───────── -->
+    <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>http://localhost:3100/loki/api/v1/push</url>
+        </http>
+
+        <format>
+            <label>
+                <pattern>service_name=${APP_NAME},level=%level</pattern>
+            </label>
+            <message>
+                <pattern>%msg</pattern>
+            </message>
+        </format>
+
+        <batchMaxBytes>262144</batchMaxBytes>
+        <batchTimeoutMs>1000</batchTimeoutMs>
+    </appender>
+
+    <!-- Async Wrapper -->
+    <appender name="LOKI_ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="LOKI"/>
+        <queueSize>500</queueSize>
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <!-- Root Logger -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="LOKI_ASYNC"/>
+    </root>
+
+</configuration>

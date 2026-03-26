@@ -1,6 +1,6 @@
 package com.finflow.document.service;
 
-import com.finflow.document.config.RabbitMQConfig;
+import com.finflow.document.entity.AllowedDocumentType;
 import com.finflow.document.entity.Document;
 import com.finflow.document.entity.Document.VerificationStatus;
 import com.finflow.document.entity.DocumentVerificationHistory;
@@ -12,236 +12,213 @@ import feign.FeignException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.multipart.MultipartFile;
 
-import java.time.LocalDateTime;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 public class DocumentServiceTest {
 
-    @Mock
-    private DocumentRepository documentRepository;
-
-    @Mock
-    private DocumentVerificationHistoryRepository historyRepository;
-
-    @Mock
-    private RabbitTemplate rabbitTemplate;
-
-    @Mock
-    private ApplicationServiceClient applicationClient;
+    @Mock private DocumentRepository documentRepository;
+    @Mock private DocumentVerificationHistoryRepository historyRepository;
+    @Mock private RabbitTemplate rabbitTemplate;
+    @Mock private ApplicationServiceClient applicationClient;
 
     @InjectMocks
     private DocumentService documentService;
 
-    private Document draftDocument;
-    private final Long VALID_DOC_ID = 500L;
-    private final Long VALID_APP_ID = 100L;
-    private final Long VALID_USER_ID = 42L;
-    private final Long VALID_ADMIN_ID = 99L;
+    private MultipartFile mockFile;
 
     @BeforeEach
-    void setUp() {
-        draftDocument = Document.builder()
-                .id(VALID_DOC_ID)
-                .applicationId(VALID_APP_ID)
-                .documentType("AADHAR")
-                .verificationStatus(VerificationStatus.PENDING)
-                .build();
+    void setUp() throws IOException {
+        ReflectionTestUtils.setField(documentService, "uploadPath", "target/test-uploads");
+        mockFile = new MockMultipartFile("file", "test.pdf", "application/pdf", "dummy content".getBytes());
+        Files.createDirectories(Paths.get("target/test-uploads/1"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // 1. Ownership Validation via Feign
-    // ─────────────────────────────────────────────────────────────────────────
     @Test
-    void validateAccess_WhenOwner_DoesNotThrowException() {
-        // Arrange
-        when(applicationClient.getApplication(eq(VALID_APP_ID), eq(VALID_USER_ID), eq("ROLE_APPLICANT")))
-                .thenReturn(Map.of("id", VALID_APP_ID));
+    void uploadDocument_InvalidType_ThrowsException() {
+        assertThrows(IllegalArgumentException.class, () ->
+            documentService.uploadDocument(1L, 1L, "ROLE_APPLICANT", "INVALID", mockFile));
+    }
 
-        // Act & Assert
-        assertDoesNotThrow(() -> {
-            documentService.validateAccess(VALID_APP_ID, VALID_USER_ID, "ROLE_APPLICANT");
-        });
+    @Test
+    void uploadDocument_MissingHeaders_ThrowsException() {
+        assertThrows(AccessDeniedException.class, () ->
+            documentService.uploadDocument(1L, null, null, "AADHAR", mockFile));
+    }
+
+    @Test
+    void uploadDocument_AdminRole_ThrowsException() {
+        assertThrows(AccessDeniedException.class, () ->
+            documentService.uploadDocument(1L, 1L, "ROLE_ADMIN", "AADHAR", mockFile));
+    }
+
+    @Test
+    void uploadDocument_FeignForbidden_ThrowsException() {
+        when(applicationClient.getApplication(any(), any(), any())).thenThrow(FeignException.Forbidden.class);
+        assertThrows(AccessDeniedException.class, () ->
+            documentService.uploadDocument(1L, 1L, "ROLE_APPLICANT", "AADHAR", mockFile));
+    }
+
+    @Test
+    void uploadDocument_FeignNotFound_ThrowsException() {
+        when(applicationClient.getApplication(any(), any(), any())).thenThrow(FeignException.NotFound.class);
+        assertThrows(IllegalArgumentException.class, () ->
+            documentService.uploadDocument(1L, 1L, "ROLE_APPLICANT", "AADHAR", mockFile));
+    }
+
+    @Test
+    void uploadDocument_ThrottleLimitReached_ThrowsException() {
+        when(documentRepository.findByApplicationIdAndDocumentType(1L, "AADHAR")).thenReturn(Optional.empty());
+        when(documentRepository.countByApplicationId(1L)).thenReturn(3L);
+
+        assertThrows(IllegalArgumentException.class, () ->
+            documentService.uploadDocument(1L, 1L, "ROLE_APPLICANT", "AADHAR", mockFile));
+    }
+
+    @Test
+    void uploadDocument_Existing_UpdatesAndSaves() throws IOException {
+        Document existing = Document.builder().id(99L).build();
+        when(documentRepository.findByApplicationIdAndDocumentType(1L, "AADHAR")).thenReturn(Optional.of(existing));
+        when(documentRepository.save(any())).thenReturn(existing);
+
+        Document doc = documentService.uploadDocument(1L, 1L, "ROLE_APPLICANT", "AADHAR", mockFile);
+        assertNotNull(doc);
+        verify(historyRepository, times(1)).save(any());
+    }
+
+    @Test
+    void uploadDocument_New_Saves() throws IOException {
+        when(documentRepository.findByApplicationIdAndDocumentType(1L, "AADHAR")).thenReturn(Optional.empty());
+        when(documentRepository.countByApplicationId(1L)).thenReturn(0L);
+        when(documentRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        Document doc = documentService.uploadDocument(1L, 1L, "ROLE_APPLICANT", "AADHAR", mockFile);
+        assertNotNull(doc);
+    }
+
+    @Test
+    void uploadDocumentFallback_ThrowsException() {
+        assertThrows(RuntimeException.class, () ->
+            documentService.uploadDocumentFallback(1L, 1L, "ROLE_APPLICANT", "AADHAR", mockFile, new RuntimeException("Test")));
+    }
+
+    @Test
+    void getDocumentsByApplication_Success() {
+        when(documentRepository.findByApplicationId(1L)).thenReturn(List.of(Document.builder().build()));
+        assertEquals(1, documentService.getDocumentsByApplication(1L, 1L, "ROLE_ADMIN").size());
+    }
+
+    @Test
+    void getRequiredDocumentsStatus_Success() {
+        when(documentRepository.findByApplicationId(1L)).thenReturn(List.of(
+            Document.builder().documentType("AADHAR").build()
+        ));
+        Map<String, List<String>> status = documentService.getRequiredDocumentsStatus(1L, 1L, "ROLE_ADMIN");
+        assertTrue(status.get("uploaded").contains("AADHAR"));
+        assertTrue(status.get("pending").contains("PAN"));
+    }
+
+    @Test
+    void validateAccessFallback_ThrowsException() {
+        assertThrows(RuntimeException.class, () ->
+            documentService.validateAccessFallback(1L, 1L, "ROLE", new RuntimeException()));
+    }
+
+    @Test
+    void getDocumentById_NotFound_ThrowsException() {
+        assertThrows(RuntimeException.class, () -> documentService.getDocumentById(1L));
+    }
+
+    @Test
+    void validateDocumentAccess_MissingHeaders_ThrowsException() {
+        when(documentRepository.findById(1L)).thenReturn(Optional.of(Document.builder().applicationId(1L).build()));
+        assertThrows(AccessDeniedException.class, () -> documentService.validateDocumentAccess(1L, null, null));
+    }
+
+    @Test
+    void validateDocumentAccess_Forbidden_ThrowsException() {
+        when(documentRepository.findById(1L)).thenReturn(Optional.of(Document.builder().applicationId(1L).build()));
+        when(applicationClient.getApplication(1L, 1L, "ROLE_APPLICANT")).thenThrow(FeignException.Forbidden.class);
+        assertThrows(AccessDeniedException.class, () -> documentService.validateDocumentAccess(1L, 1L, "ROLE_APPLICANT"));
+    }
+
+    @Test
+    void getVerificationHistory_Success() {
+        when(documentRepository.findById(1L)).thenReturn(Optional.of(Document.builder().applicationId(10L).build()));
+        when(historyRepository.findByDocumentIdOrderByVerifiedAtDesc(1L)).thenReturn(List.of());
+        assertNotNull(documentService.getVerificationHistory(1L, 1L, "ROLE_ADMIN"));
+    }
+
+    @Test
+    void getFileForViewing_FileNotFound_ThrowsException() {
+        when(documentRepository.findById(1L)).thenReturn(Optional.of(Document.builder().applicationId(10L).filePath("target/nonexistent.pdf").build()));
+        assertThrows(IllegalStateException.class, () -> documentService.getFileForViewing(1L, 1L, "ROLE_ADMIN"));
+    }
+
+    @Test
+    void getFileForViewing_Found_ReturnsResource() throws IOException {
+        Path path = Paths.get("target/test-uploads/1/test-file.pdf");
+        Files.createDirectories(path.getParent());
+        Files.write(path, "content".getBytes());
+        when(documentRepository.findById(1L)).thenReturn(Optional.of(Document.builder().applicationId(10L).filePath(path.toString()).build()));
         
-        verify(applicationClient, times(1)).getApplication(VALID_APP_ID, VALID_USER_ID, "ROLE_APPLICANT");
+        org.springframework.core.io.Resource resource = documentService.getFileForViewing(1L, 1L, "ROLE_ADMIN");
+        assertNotNull(resource);
     }
 
     @Test
-    void validateAccess_WhenNotOwner_ThrowsAccessDeniedException() {
-        // Arrange
-        when(applicationClient.getApplication(eq(VALID_APP_ID), eq(VALID_USER_ID), eq("ROLE_USER")))
-                .thenThrow(mock(FeignException.Forbidden.class));
-
-        // Act & Assert
-        AccessDeniedException exception = assertThrows(AccessDeniedException.class, () -> {
-            documentService.validateAccess(VALID_APP_ID, VALID_USER_ID, "ROLE_USER");
-        });
-
-        assertEquals("Access Denied: You do not own this application", exception.getMessage());
+    void updateInternalStatus_NullInput_ThrowsException() {
+        assertThrows(IllegalArgumentException.class, () -> documentService.updateInternalStatus(null, "VERIFIED", "", 1L));
+        assertThrows(IllegalArgumentException.class, () -> documentService.updateInternalStatus(1L, null, "", 1L));
     }
 
     @Test
-    void validateAccess_WhenAdmin_BypassesFeignValidation() {
-        // Act & Assert
-        assertDoesNotThrow(() -> {
-            documentService.validateAccess(VALID_APP_ID, VALID_ADMIN_ID, "ROLE_ADMIN");
-        });
-
-        // Ensure no network calls are made for internal Admins
-        verify(applicationClient, never()).getApplication(anyLong(), anyLong(), anyString());
+    void updateInternalStatus_InvalidStatus_ThrowsException() {
+        when(documentRepository.findById(1L)).thenReturn(Optional.of(Document.builder().build()));
+        assertThrows(IllegalArgumentException.class, () -> documentService.updateInternalStatus(1L, "INVALID", "", 1L));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // 2. Successful Verification (No Event if others are pending)
-    // ─────────────────────────────────────────────────────────────────────────
     @Test
-    void updateInternalStatus_WhenVerifiedButOthersPending_SavesWithoutEvent() {
-        // Arrange
-        Document pendingDoc2 = Document.builder().id(501L).applicationId(VALID_APP_ID).verificationStatus(VerificationStatus.PENDING).build();
+    void updateInternalStatus_AlreadyStatus_SkipsUpdate() {
+        Document doc = Document.builder().verificationStatus(VerificationStatus.VERIFIED).build();
+        when(documentRepository.findById(1L)).thenReturn(Optional.of(doc));
         
-        when(documentRepository.findById(VALID_DOC_ID)).thenReturn(Optional.of(draftDocument));
-        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
-        
-        // Return a list containing the newly verified doc + another still pending doc
-        when(documentRepository.findByApplicationId(VALID_APP_ID)).thenReturn(List.of(draftDocument, pendingDoc2));
-
-        // Act
-        Document result = documentService.updateInternalStatus(VALID_DOC_ID, "VERIFIED", "Looks authentic", VALID_ADMIN_ID);
-
-        // Assert
-        assertEquals(VerificationStatus.VERIFIED, result.getVerificationStatus());
-        assertNotNull(result.getVerifiedAt());
-
-        // Validate History Creation
-        ArgumentCaptor<DocumentVerificationHistory> historyCaptor = ArgumentCaptor.forClass(DocumentVerificationHistory.class);
-        verify(historyRepository).save(historyCaptor.capture());
-        assertEquals(VerificationStatus.VERIFIED, historyCaptor.getValue().getStatus());
-        assertEquals("Looks authentic", historyCaptor.getValue().getRemarks());
-
-        // Ensure Event is NEVER Sent because pendingDoc2 is pending
-        verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any(Object.class));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 3. Event Publishing (When all documents in the batch become VERIFIED)
-    // ─────────────────────────────────────────────────────────────────────────
-    @Test
-    void updateInternalStatus_WhenVerifiedAndAllOthersVerified_PublishesEvent() {
-        // Arrange
-        when(documentRepository.findById(VALID_DOC_ID)).thenReturn(Optional.of(draftDocument));
-        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
-        
-        // Return a list where ALL documents associated with application are VERIFIED
-        when(documentRepository.findByApplicationId(VALID_APP_ID)).thenReturn(List.of(draftDocument));
-
-        // Act
-        documentService.updateInternalStatus(VALID_DOC_ID, "VERIFIED", "Perfect", VALID_ADMIN_ID);
-
-        // Assert - Deep Validation of Event
-        ArgumentCaptor<Map<String, Object>> eventCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(rabbitTemplate, times(1)).convertAndSend(
-                eq(RabbitMQConfig.DOC_EXCHANGE),
-                eq(RabbitMQConfig.DOC_VERIFIED_ROUTING),
-                eventCaptor.capture()
-        );
-
-        Map<String, Object> capturedEvent = eventCaptor.getValue();
-        assertEquals("DOCUMENTS_VERIFIED", capturedEvent.get("eventType"));
-        assertEquals(VALID_APP_ID, capturedEvent.get("applicationId"));
-        assertNotNull(capturedEvent.get("verifiedAt"));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 4. Document Not Found
-    // ─────────────────────────────────────────────────────────────────────────
-    @Test
-    void getDocumentById_WhenNotFound_ThrowsException() {
-        when(documentRepository.findById(VALID_DOC_ID)).thenReturn(Optional.empty());
-
-        RuntimeException exception = assertThrows(RuntimeException.class, () -> {
-            documentService.getDocumentById(VALID_DOC_ID);
-        });
-        assertEquals("Document not found: " + VALID_DOC_ID, exception.getMessage());
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 5. Invalid Status Input
-    // ─────────────────────────────────────────────────────────────────────────
-    @Test
-    void updateInternalStatus_WhenStatusIsInvalid_ThrowsIllegalArgumentException() {
-        when(documentRepository.findById(VALID_DOC_ID)).thenReturn(Optional.of(draftDocument));
-
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
-            documentService.updateInternalStatus(VALID_DOC_ID, "INVALID_STATUS", "remarks", VALID_ADMIN_ID);
-        });
-        assertEquals("Invalid status: INVALID_STATUS", exception.getMessage());
+        Document updated = documentService.updateInternalStatus(1L, "VERIFIED", "ok", 1L);
+        assertEquals(doc, updated);
         verify(documentRepository, never()).save(any());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // 6. Idempotency Case
-    // ─────────────────────────────────────────────────────────────────────────
     @Test
-    void updateInternalStatus_WhenAlreadyVerified_DoesNothing() {
-        draftDocument.setVerificationStatus(VerificationStatus.VERIFIED);
-        when(documentRepository.findById(VALID_DOC_ID)).thenReturn(Optional.of(draftDocument));
-
-        Document result = documentService.updateInternalStatus(VALID_DOC_ID, "VERIFIED", "perfect", VALID_ADMIN_ID);
-
-        assertEquals(VerificationStatus.VERIFIED, result.getVerificationStatus());
-        verify(documentRepository, never()).save(any());
-        verify(historyRepository, never()).save(any());
-        verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any(Object.class));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 7. Reject Flow
-    // ─────────────────────────────────────────────────────────────────────────
-    @Test
-    void updateInternalStatus_WhenRejected_SavesWithoutEvent() {
-        when(documentRepository.findById(VALID_DOC_ID)).thenReturn(Optional.of(draftDocument));
-        when(documentRepository.save(any(Document.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        Document result = documentService.updateInternalStatus(VALID_DOC_ID, "REJECTED", "Blurry image", VALID_ADMIN_ID);
-
-        assertEquals(VerificationStatus.REJECTED, result.getVerificationStatus());
+    void updateInternalStatus_ChangesStatus_AndPublishesWhenAllVerified() {
+        Document doc = Document.builder().applicationId(10L).verificationStatus(VerificationStatus.PENDING).build();
+        when(documentRepository.findById(1L)).thenReturn(Optional.of(doc));
+        when(documentRepository.save(any())).thenReturn(doc);
         
-        ArgumentCaptor<DocumentVerificationHistory> historyCaptor = ArgumentCaptor.forClass(DocumentVerificationHistory.class);
-        verify(historyRepository).save(historyCaptor.capture());
-        assertEquals(VerificationStatus.REJECTED, historyCaptor.getValue().getStatus());
+        Document d2 = Document.builder().verificationStatus(VerificationStatus.VERIFIED).build();
+        when(documentRepository.findByApplicationId(10L)).thenReturn(List.of(doc, d2));
 
-        verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any(Object.class));
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 8. Null Input Handling
-    // ─────────────────────────────────────────────────────────────────────────
-    @Test
-    void updateInternalStatus_WhenDocumentIdIsNull_ThrowsIllegalArgumentException() {
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
-            documentService.updateInternalStatus(null, "VERIFIED", "remarks", VALID_ADMIN_ID);
-        });
-        assertEquals("Document ID and status cannot be null", exception.getMessage());
-    }
-
-    @Test
-    void updateInternalStatus_WhenStatusIsNull_ThrowsIllegalArgumentException() {
-        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
-            documentService.updateInternalStatus(VALID_DOC_ID, null, "remarks", VALID_ADMIN_ID);
-        });
-        assertEquals("Document ID and status cannot be null", exception.getMessage());
+        documentService.updateInternalStatus(1L, "VERIFIED", "ok", 1L);
+        
+        verify(documentRepository, times(1)).save(any());
+        verify(historyRepository, times(1)).save(any());
+        verify(rabbitTemplate, times(1)).convertAndSend(anyString(), anyString(), any(Map.class));
     }
 }

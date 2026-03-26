@@ -32,6 +32,44 @@ document:
   upload:
     path: C:/finflow/documents/
 
+resilience4j:
+  circuitbreaker:
+    instances:
+      applicationServiceCB:
+        failureRateThreshold: 50
+        slidingWindowSize: 10
+        waitDurationInOpenState: 10s
+      documentServiceCB:
+        failureRateThreshold: 50
+        slidingWindowSize: 10
+        waitDurationInOpenState: 10s
+      authServiceCB:
+        failureRateThreshold: 50
+        slidingWindowSize: 10
+        waitDurationInOpenState: 10s
+  retry:
+    instances:
+      applicationServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+      documentServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+      authServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+
+
+feign:
+  client:
+    config:
+      default:
+        connectTimeout: 5000
+        readTimeout: 5000
+        loggerLevel: BASIC
+  circuitbreaker:
+    enabled: true
+
 eureka:
   client:
     service-url:
@@ -46,6 +84,12 @@ springdoc:
     path: /swagger-ui.html
 
 management:
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: "http://localhost:9411/api/v2/spans"
   endpoints:
     web:
       exposure:

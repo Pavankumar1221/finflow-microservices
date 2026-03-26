@@ -1,0 +1,404 @@
+# ================================================================
+#  FinFlow Microservices — Full Docker Compose Stack
+#  Run from: d:\FinFlow\docker-compose\
+#  Command : docker compose up --build
+# ================================================================
+# Startup order:
+#   1. mysql, rabbitmq, loki          (infrastructure)
+#   2. grafana                         (depends: loki)
+#   3. config-server                   (depends: nothing, pulls config from GitHub)
+#   4. eureka-server                   (depends: config-server healthy)
+#   5. api-gateway                     (depends: eureka-server healthy)
+#   6. auth / application / document / admin  (depends: mysql + rabbitmq + eureka-server)
+# ================================================================
+
+networks:
+  finflow-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
+    driver: local
+  rabbitmq-data:
+    driver: local
+  loki-data:
+    driver: local
+  grafana-data:
+    driver: local
+  document-uploads:
+    driver: local
+
+services:
+
+  # ──────────────────────────────────────────────────────────────
+  # INFRASTRUCTURE — MySQL
+  # ──────────────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: finflow-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_USER: ${MYSQL_APP_USER}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD}
+      # MySQL creates MYSQL_USER only for non-root users;
+      # the databases are created by init.sql instead
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql-init/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "--password=${MYSQL_ROOT_PASSWORD}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────
+  # INFRASTRUCTURE — RabbitMQ
+  # ──────────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: finflow-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "check_port_connectivity" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────
+  # INFRASTRUCTURE — Loki (log aggregation)
+  # ──────────────────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: finflow-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+      - ./loki-config.yml:/etc/loki/local-config.yaml:ro
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:3100/ready || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ──────────────────────────────────────────────────────────────
+  # INFRASTRUCTURE — Grafana (log visualisation)
+  # ──────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: finflow-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_LOG_LEVEL: warn
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./finflow-logs-dashboard.json:/etc/grafana/provisioning/dashboards/finflow-logs-dashboard.json:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:3000/api/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────
+  # MICROSERVICES — Config Server  (port 7001)
+  # Clones config from GitHub: Pavankumar1221/finflow-config-repo
+  # ──────────────────────────────────────────────────────────────
+  config-server:
+    build:
+      context: ../config-server
+      dockerfile: Dockerfile
+    image: finflow/config-server:latest
+    container_name: finflow-config-server
+    restart: unless-stopped
+    environment:
+      # Override Eureka URL: config-server also registers with Eureka
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
+      # Loki log shipping: override the default localhost URL
+      LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      # GitHub config repo (kept as-is — public repo, internet accessible in Docker)
+      SPRING_CLOUD_CONFIG_SERVER_GIT_URI: ${CONFIG_SERVER_GIT_URI}
+      SPRING_CLOUD_CONFIG_SERVER_GIT_DEFAULT-LABEL: ${CONFIG_SERVER_GIT_BRANCH}
+    ports:
+      - "7001:7001"
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:7001/actuator/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ──────────────────────────────────────────────────────────────
+  # MICROSERVICES — Eureka Server  (port 7002)
+  # ──────────────────────────────────────────────────────────────
+  eureka-server:
+    build:
+      context: ../eureka-server
+      dockerfile: Dockerfile
+    image: finflow/eureka-server:latest
+    container_name: finflow-eureka-server
+    restart: unless-stopped
+    environment:
+      # Pull config from config-server container (not localhost)
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:7001
+      # Self-registration: Eureka points to itself via Docker hostname
+      EUREKA_INSTANCE_HOSTNAME: eureka-server
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
+      # Loki
+      LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+    ports:
+      - "7002:7002"
+    depends_on:
+      config-server:
+        condition: service_healthy
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:7002/actuator/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ──────────────────────────────────────────────────────────────
+  # MICROSERVICES — API Gateway  (port 7003)
+  # ──────────────────────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ../api-gateway
+      dockerfile: Dockerfile
+    image: finflow/api-gateway:latest
+    container_name: finflow-api-gateway
+    restart: unless-stopped
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:7001
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
+      LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      # JWT secret (matches all services)
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION}
+    ports:
+      - "7003:7003"
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:7003/actuator/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ──────────────────────────────────────────────────────────────
+  # MICROSERVICES — Auth Service  (port 7004)
+  # ──────────────────────────────────────────────────────────────
+  auth-service:
+    build:
+      context: ../auth-service
+      dockerfile: Dockerfile
+    image: finflow/auth-service:latest
+    container_name: finflow-auth-service
+    restart: unless-stopped
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:7001
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
+      # MySQL: override localhost → mysql container
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/finflow_auth?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD}
+      # RabbitMQ: override localhost → rabbitmq container
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      # JWT
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION}
+      # Loki
+      LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      # Force env-vars to override Config Server values (Spring Cloud Config override)
+      SPRING_CLOUD_CONFIG_OVERRIDE_NONE: "true"
+    ports:
+      - "7004:7004"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:7004/actuator/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  # ──────────────────────────────────────────────────────────────
+  # MICROSERVICES — Application Service  (port 7005)
+  # ──────────────────────────────────────────────────────────────
+  application-service:
+    build:
+      context: ../application-service
+      dockerfile: Dockerfile
+    image: finflow/application-service:latest
+    container_name: finflow-application-service
+    restart: unless-stopped
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:7001
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/finflow_application?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      # Force env-vars to override Config Server values
+      SPRING_CLOUD_CONFIG_OVERRIDE_NONE: "true"
+    ports:
+      - "7005:7005"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:7005/actuator/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  # ──────────────────────────────────────────────────────────────
+  # MICROSERVICES — Document Service  (port 7006)
+  # ──────────────────────────────────────────────────────────────
+  document-service:
+    build:
+      context: ../document-service
+      dockerfile: Dockerfile
+    image: finflow/document-service:latest
+    container_name: finflow-document-service
+    restart: unless-stopped
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:7001
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/finflow_document?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      # Override Windows file path → Docker volume mount path
+      DOCUMENT_UPLOAD_PATH: /app/uploads/
+      LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      # Force env-vars to override Config Server values
+      SPRING_CLOUD_CONFIG_OVERRIDE_NONE: "true"
+    ports:
+      - "7006:7006"
+    volumes:
+      - document-uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:7006/actuator/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  # ──────────────────────────────────────────────────────────────
+  # MICROSERVICES — Admin Service  (port 7007)
+  # ──────────────────────────────────────────────────────────────
+  admin-service:
+    build:
+      context: ../admin-service
+      dockerfile: Dockerfile
+    image: finflow/admin-service:latest
+    container_name: finflow-admin-service
+    restart: unless-stopped
+    environment:
+      SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:7001
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/finflow_admin?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_APP_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_APP_PASSWORD}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      LOGGING_LOKI_URL_ADMIN: http://loki:3100/loki/api/v1/push
+      # Force env-vars to override Config Server values
+      SPRING_CLOUD_CONFIG_OVERRIDE_NONE: "true"
+    ports:
+      - "7007:7007"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:7007/actuator/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s

@@ -32,6 +32,39 @@ feign:
   circuitbreaker:
     enabled: true
 
+resilience4j:
+  circuitbreaker:
+    instances:
+      applicationServiceCB:
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 3
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+      documentServiceCB:
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 3
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+      authServiceCB:
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 3
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+  retry:
+    instances:
+      applicationServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+      documentServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+      authServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+
 info:
   app:
     name: FinFlow Admin Service

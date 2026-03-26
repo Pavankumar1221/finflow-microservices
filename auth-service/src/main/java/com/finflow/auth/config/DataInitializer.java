@@ -14,7 +14,12 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 @Slf4j
 public class DataInitializer implements CommandLineRunner {
-
+//	This code runs immediately when this service starts
+//  CommandLineRunner is an interface which is used like it loads this code when ever application starts 
+//	loads all the default admins or users into DatsBase
+	
+//	We wrote @RequiredArgsConstructor there right that is a lombok annotation which is used to create constructor for this repos without manual code
+//	@sl4j is used to provide logs
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;

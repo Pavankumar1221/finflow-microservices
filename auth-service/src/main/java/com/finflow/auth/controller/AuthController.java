@@ -14,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -47,6 +48,28 @@ public class AuthController {
     @PreAuthorize("hasRole('ROLE_ADMIN')")
     public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
         return ResponseEntity.ok(authService.getUserById(id));
+    }
+
+    @GetMapping("/internal/users")
+    @Operation(summary = "Internal: Get all users", hidden = true)
+    public ResponseEntity<List<Map<String, Object>>> getAllUsersInternal(
+            @RequestHeader(value = "X-Internal-Call", required = false) String internalCall,
+            @RequestHeader(value = "X-Forwarded-Host", required = false) String forwardedHost) {
+        if (forwardedHost != null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (!"admin-service".equals(internalCall)) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        return ResponseEntity.ok(authService.getAllUsersInternal());
+    }
+
+    @PutMapping("/internal/users/{id}")
+    @Operation(summary = "Internal: Update user role/status", hidden = true)
+    public ResponseEntity<Map<String, Object>> updateUserInternal(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> updateRequest,
+            @RequestHeader(value = "X-Internal-Call", required = false) String internalCall,
+            @RequestHeader(value = "X-Forwarded-Host", required = false) String forwardedHost) {
+        if (forwardedHost != null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (!"admin-service".equals(internalCall)) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        return ResponseEntity.ok(authService.updateUserInternal(id, updateRequest));
     }
 
     @GetMapping("/health")

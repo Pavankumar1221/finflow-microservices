@@ -20,6 +20,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Service
@@ -91,6 +93,41 @@ public class AuthService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
         return toUserResponse(user);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getAllUsersInternal() {
+        return userRepository.findAll().stream().map(user -> Map.<String, Object>of(
+                "id", user.getId(),
+                "fullName", user.getFullName(),
+                "email", user.getEmail(),
+                "status", user.getStatus().name(),
+                "roles", user.getRoles().stream().map(Role::getRoleName).collect(Collectors.toList())
+        )).collect(Collectors.toList());
+    }
+
+    public Map<String, Object> updateUserInternal(Long id, Map<String, Object> req) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+                
+        if (req.containsKey("status")) {
+            user.setStatus(User.UserStatus.valueOf((String) req.get("status")));
+        }
+        
+        if (req.containsKey("role")) {
+            String roleName = (String) req.get("role");
+            Role role = roleRepository.findByRoleName(roleName)
+                    .orElseThrow(() -> new RuntimeException("Role not found: " + roleName));
+            user.getRoles().clear();
+            user.getRoles().add(role);
+        }
+        
+        User saved = userRepository.save(user);
+        return Map.of(
+                "id", saved.getId(),
+                "status", saved.getStatus().name(),
+                "roles", saved.getRoles().stream().map(Role::getRoleName).collect(Collectors.toList())
+        );
     }
 
     private UserResponse toUserResponse(User user) {

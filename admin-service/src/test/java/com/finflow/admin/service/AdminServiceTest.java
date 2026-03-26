@@ -19,11 +19,15 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -80,7 +84,7 @@ public class AdminServiceTest {
                 .thenReturn(Map.of("id", VALID_APP_ID, "status", "SUBMITTED"));
 
         when(documentClient.getDocumentsByApplication(eq(VALID_APP_ID), eq(String.valueOf(VALID_ADMIN_ID)), eq(ADMIN_ROLE)))
-                .thenReturn(List.of(Map.of("status", "VERIFIED")));
+                .thenReturn(List.of(Map.of("verificationStatus", "VERIFIED")));
 
         when(decisionRepository.existsByApplicationId(VALID_APP_ID)).thenReturn(false);
         when(decisionRepository.save(any(Decision.class))).thenAnswer(inv -> {
@@ -120,7 +124,7 @@ public class AdminServiceTest {
     // ─────────────────────────────────────────────────────────────────────────
     @Test
     void approveApplication_WhenApplicationNotFound_ThrowsException() {
-        // Arrange (Requirement #1 & #5)
+        // Arrange
         when(applicationClient.getApplication(eq(VALID_APP_ID), anyString(), anyString()))
                 .thenThrow(mock(FeignException.NotFound.class));
 
@@ -138,13 +142,13 @@ public class AdminServiceTest {
     // ─────────────────────────────────────────────────────────────────────────
     @Test
     void approveApplication_WhenDocumentsNotVerified_ThrowsException() {
-        // Arrange (Requirement #2)
+        // Arrange
         when(applicationClient.getApplication(eq(VALID_APP_ID), anyString(), anyString()))
                 .thenReturn(Map.of("id", VALID_APP_ID));
 
         // Mock document as PENDING
         when(documentClient.getDocumentsByApplication(eq(VALID_APP_ID), anyString(), anyString()))
-                .thenReturn(List.of(Map.of("status", "PENDING")));
+                .thenReturn(List.of(Map.of("verificationStatus", "PENDING")));
 
         // Act & Assert
         RuntimeException exception = assertThrows(RuntimeException.class, () -> {
@@ -156,12 +160,41 @@ public class AdminServiceTest {
         verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any(Object.class));
     }
 
+    @Test
+    void approveApplication_WhenDocumentsEmpty_ThrowsException() {
+        when(applicationClient.getApplication(eq(VALID_APP_ID), anyString(), anyString()))
+                .thenReturn(Map.of("id", VALID_APP_ID));
+        when(documentClient.getDocumentsByApplication(eq(VALID_APP_ID), anyString(), anyString()))
+                .thenReturn(Collections.emptyList());
+
+        RuntimeException exception = assertThrows(RuntimeException.class, () -> {
+            adminService.approveApplication(VALID_APP_ID, VALID_ADMIN_ID, validApproveRequest, ADMIN_ROLE);
+        });
+
+        assertEquals("Cannot approve: All documents must be VERIFIED", exception.getMessage());
+    }
+
+    @Test
+    void approveApplication_WhenDecisionExists_ThrowsException() {
+        when(applicationClient.getApplication(eq(VALID_APP_ID), anyString(), anyString()))
+                .thenReturn(Map.of("id", VALID_APP_ID));
+        when(documentClient.getDocumentsByApplication(eq(VALID_APP_ID), anyString(), anyString()))
+                .thenReturn(List.of(Map.of("verificationStatus", "VERIFIED")));
+        when(decisionRepository.existsByApplicationId(VALID_APP_ID)).thenReturn(true);
+
+        RuntimeException exception = assertThrows(RuntimeException.class, () -> {
+            adminService.approveApplication(VALID_APP_ID, VALID_ADMIN_ID, validApproveRequest, ADMIN_ROLE);
+        });
+
+        assertEquals("Decision already exists for application: 100", exception.getMessage());
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // 4. Role Validation (Security)
     // ─────────────────────────────────────────────────────────────────────────
     @Test
     void approveApplication_WhenNotAdminRole_ThrowsException() {
-        // Arrange (Requirement #3)
+        // Arrange
         String invalidRole = "ROLE_USER";
 
         // Act & Assert
@@ -178,7 +211,6 @@ public class AdminServiceTest {
     // ─────────────────────────────────────────────────────────────────────────
     @Test
     void approveApplication_WhenRequestIsNull_ThrowsException() {
-        // Arrange (Requirement #7)
         // Act & Assert
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
             adminService.approveApplication(VALID_APP_ID, VALID_ADMIN_ID, null, ADMIN_ROLE);
@@ -192,7 +224,7 @@ public class AdminServiceTest {
     // ─────────────────────────────────────────────────────────────────────────
     @Test
     void approveApplication_WhenAmountIsZero_ThrowsException() {
-        // Arrange (Requirement #7)
+        // Arrange
         validApproveRequest.setApprovedAmount(BigDecimal.ZERO);
 
         // Act & Assert
@@ -230,5 +262,74 @@ public class AdminServiceTest {
         ArgumentCaptor<AdminAuditLog> auditCaptor = ArgumentCaptor.forClass(AdminAuditLog.class);
         verify(auditLogRepository).save(auditCaptor.capture());
         assertEquals("REJECT", auditCaptor.getValue().getActionType());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Additional Coverage Tests
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void verifyDocumentViaFeign_Success() {
+        Long docId = 20L;
+        when(documentClient.updateDocumentStatus(eq(docId), any(), anyString(), anyString()))
+                .thenReturn(Map.of("id", docId, "verificationStatus", "VERIFIED"));
+
+        Object result = adminService.verifyDocumentViaFeign(docId, VALID_ADMIN_ID, null);
+
+        assertNotNull(result);
+        verify(auditLogRepository).save(any(AdminAuditLog.class));
+    }
+
+    @Test
+    void rejectDocumentViaFeign_Success() {
+        Long docId = 20L;
+        when(documentClient.updateDocumentStatus(eq(docId), any(), anyString(), anyString()))
+                .thenReturn(Map.of("id", docId, "verificationStatus", "REJECTED"));
+
+        Object result = adminService.rejectDocumentViaFeign(docId, VALID_ADMIN_ID, "Illegible Document");
+
+        assertNotNull(result);
+        verify(auditLogRepository).save(any(AdminAuditLog.class));
+    }
+
+    @Test
+    void getAllApplications_ReturnsList() {
+        when(applicationClient.getAllApplications(anyString(), anyString()))
+                .thenReturn(List.of(Map.of("id", 1L)));
+        List<Object> apps = adminService.getAllApplications(String.valueOf(VALID_ADMIN_ID), ADMIN_ROLE);
+        assertFalse(apps.isEmpty());
+    }
+
+    @Test
+    void getApplicationForReview_ReturnCompositeMap() {
+        when(applicationClient.getApplication(VALID_APP_ID, String.valueOf(VALID_ADMIN_ID), ADMIN_ROLE))
+                .thenReturn(Map.of("id", VALID_APP_ID));
+        when(documentClient.getDocumentsByApplication(VALID_APP_ID, String.valueOf(VALID_ADMIN_ID), ADMIN_ROLE))
+                .thenReturn(List.of(Map.of("id", 5L)));
+
+        Map<String, Object> result = adminService.getApplicationForReview(VALID_APP_ID, String.valueOf(VALID_ADMIN_ID), ADMIN_ROLE);
+        assertTrue(result.containsKey("application"));
+        assertTrue(result.containsKey("documents"));
+    }
+
+    @Test
+    void getDecisionByApplication_WhenExists_ReturnsDecision() {
+        Decision d = new Decision();
+        d.setApplicationId(VALID_APP_ID);
+        d.setDecisionStatus(Decision.DecisionStatus.APPROVED);
+        when(decisionRepository.findByApplicationId(VALID_APP_ID)).thenReturn(Optional.of(d));
+
+        Decision result = adminService.getDecisionByApplication(VALID_APP_ID);
+        assertEquals(Decision.DecisionStatus.APPROVED, result.getDecisionStatus());
+    }
+
+    @Test
+    void getAuditLogs_ReturnsPage() {
+        AdminAuditLog log = new AdminAuditLog();
+        log.setAdminId(VALID_ADMIN_ID);
+        Page<AdminAuditLog> page = new PageImpl<>(List.of(log));
+        when(auditLogRepository.findAll(any(PageRequest.class))).thenReturn(page);
+
+        Page<AdminAuditLog> result = adminService.getAuditLogs(PageRequest.of(0, 5));
+        assertEquals(1, result.getContent().size());
     }
 }

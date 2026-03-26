@@ -5,7 +5,7 @@ spring:
   application:
     name: admin-service
   config:
-    import: "optional:configserver:http://localhost:7001"
+    import: optional:configserver:http://localhost:7001
   datasource:
     url: jdbc:mysql://localhost:3306/finflow_admin?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true
     username: pavan
@@ -41,6 +41,33 @@ feign:
   circuitbreaker:
     enabled: true
 
+resilience4j:
+  circuitbreaker:
+    instances:
+      applicationServiceCB:
+        failureRateThreshold: 50
+        slidingWindowSize: 10
+        waitDurationInOpenState: 10s
+      documentServiceCB:
+        failureRateThreshold: 50
+        slidingWindowSize: 10
+        waitDurationInOpenState: 10s
+      authServiceCB:
+        failureRateThreshold: 50
+        slidingWindowSize: 10
+        waitDurationInOpenState: 10s
+  retry:
+    instances:
+      applicationServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+      documentServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+      authServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+
 springdoc:
   api-docs:
     path: /v3/api-docs
@@ -48,6 +75,12 @@ springdoc:
     path: /swagger-ui.html
 
 management:
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9411/api/v2/spans
   endpoints:
     web:
       exposure:
@@ -60,3 +93,5 @@ logging:
   level:
     com.finflow.admin: DEBUG
     feign: DEBUG
+  loki:
+    url: http://localhost:3100/loki/api/v1/push

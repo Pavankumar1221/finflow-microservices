@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- ================================================================
+         FinFlow Document Service — Logback Configuration
+         - Console: coloured human-readable output (IDE / terminal)
+         - Loki:    JSON-structured logs pushed to Loki every 1 second
+         If Loki is unreachable the appender silently discards batches;
+         the Console appender is always active.
+    ================================================================ -->
+
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="document-service"/>
+    <springProperty scope="context" name="LOKI_URL"  source="logging.loki.url"       defaultValue="http://localhost:3100/loki/api/v1/push"/>
+
+    <!-- ───────── Console Appender ───────── -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) [%cyan(${APP_NAME})] [traceId=%X{traceId:-}] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ───────── Loki Appender ───────── -->
+    <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>${LOKI_URL}</url>
+            <connectionTimeoutMs>5000</connectionTimeoutMs>
+            <requestTimeoutMs>10000</requestTimeoutMs>
+        </http>
+        <format>
+            <label>
+                <pattern>service_name=${APP_NAME},log_level=%level,host=${HOSTNAME:-localhost}</pattern>
+            </label>
+            <message>
+                <pattern>
+                    {
+                      "timestamp": "%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ}",
+                      "level": "%level",
+                      "service": "${APP_NAME}",
+                      "traceId": "%X{traceId:-none}",
+                      "spanId": "%X{spanId:-none}",
+                      "thread": "%thread",
+                      "logger": "%logger{50}",
+                      "message": "%message",
+                      "exception": "%ex{full}"
+                    }
+                </pattern>
+            </message>
+            <sortByTime>true</sortByTime>
+        </format>
+        <batchMaxBytes>262144</batchMaxBytes>
+        <batchTimeoutMs>1000</batchTimeoutMs>
+        <dropRatioOnSendError>1.0</dropRatioOnSendError>
+    </appender>
+
+    <!-- Async wrapper -->
+    <appender name="LOKI_ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="LOKI"/>
+        <queueSize>500</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <!-- ───────── Root Logger ───────── -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="LOKI_ASYNC"/>
+    </root>
+
+    <!-- Reduce noise from infrastructure loggers -->
+    <logger name="org.springframework.security"   level="WARN"/>
+    <logger name="org.springframework.amqp"       level="WARN"/>
+    <logger name="com.netflix.eureka"             level="WARN"/>
+    <logger name="com.netflix.discovery"          level="WARN"/>
+    <logger name="org.hibernate"                  level="WARN"/>
+    <logger name="io.github.resilience4j"         level="WARN"/>
+
+</configuration>

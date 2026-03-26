@@ -12,6 +12,8 @@ import com.finflow.document.repository.DocumentVerificationHistoryRepository;
 import feign.FeignException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -42,6 +44,8 @@ public class DocumentService {
     @Value("${document.upload.path}")
     private String uploadPath;
 
+    @CircuitBreaker(name = "applicationServiceCB", fallbackMethod = "uploadDocumentFallback")
+    @Retry(name = "applicationServiceCB")
     public Document uploadDocument(Long applicationId, Long uploadedBy, String roles,
                                    String documentType, MultipartFile file) throws IOException {
         
@@ -114,6 +118,14 @@ public class DocumentService {
         return saved;
     }
 
+    public Document uploadDocumentFallback(Long applicationId, Long uploadedBy, String roles,
+                                           String documentType, MultipartFile file, Throwable t) throws IOException {
+        log.error("Fallback: service unavailable during uploadDocument {}", applicationId, t);
+        throw new RuntimeException("Service unavailable during document upload", t);
+    }
+
+    @CircuitBreaker(name = "applicationServiceCB", fallbackMethod = "validateAccessFallback")
+    @Retry(name = "applicationServiceCB")
     public void validateAccess(Long applicationId, Long userId, String roles) {
         if (userId == null || roles == null) {
             throw new AccessDeniedException("Missing authentication headers");
@@ -128,6 +140,11 @@ public class DocumentService {
         } catch (FeignException.NotFound e) {
             throw new IllegalArgumentException("Application not found");
         }
+    }
+
+    public void validateAccessFallback(Long applicationId, Long userId, String roles, Throwable t) {
+        log.error("Fallback: service unavailable during validateAccess {}", applicationId, t);
+        throw new RuntimeException("Service unavailable during document access validation", t);
     }
 
     @Transactional(readOnly = true)

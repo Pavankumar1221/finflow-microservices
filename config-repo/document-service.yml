@@ -30,6 +30,32 @@ document:
   upload:
     path: C:/finflow/documents/
 
+feign:
+  client:
+    config:
+      default:
+        connectTimeout: 5000
+        readTimeout: 5000
+        loggerLevel: BASIC
+  circuitbreaker:
+    enabled: true
+
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      applicationServiceCB:
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 3
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+  retry:
+    instances:
+      applicationServiceCB:
+        maxAttempts: 3
+        waitDuration: 2s
+
 info:
   app:
     name: FinFlow Document Service

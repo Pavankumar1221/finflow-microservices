@@ -18,6 +18,9 @@ public class RouteValidator {
             // Auth endpoints
             "/auth/register",
             "/auth/login",
+            
+            // Public APIs
+            "/products",
 
             // Per-service Swagger UIs routed through gateway
             "/auth-service/swagger-ui",

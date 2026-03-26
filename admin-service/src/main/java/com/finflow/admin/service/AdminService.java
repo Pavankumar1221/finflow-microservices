@@ -12,6 +12,8 @@ import com.finflow.admin.repository.AdminAuditLogRepository;
 import com.finflow.admin.repository.DecisionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -37,11 +39,20 @@ public class AdminService {
     // ─── Applications ────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
+    @CircuitBreaker(name = "applicationServiceCB", fallbackMethod = "getAllApplicationsFallback")
+    @Retry(name = "applicationServiceCB")
     public List<Object> getAllApplications(String userId, String roles) {
         return applicationClient.getAllApplications(userId, roles);
     }
 
+    public List<Object> getAllApplicationsFallback(String userId, String roles, Throwable t) {
+        log.error("Fallback: application service unavailable for getAllApplications", t);
+        return java.util.Collections.emptyList();
+    }
+
     @Transactional(readOnly = true)
+    @CircuitBreaker(name = "applicationServiceCB", fallbackMethod = "getApplicationForReviewFallback")
+    @Retry(name = "applicationServiceCB")
     public Map<String, Object> getApplicationForReview(Long applicationId, String userId, String roles) {
         Map<String, Object> application = applicationClient.getApplication(applicationId, userId, roles);
         List<Object> documents = documentClient.getDocumentsByApplication(applicationId, userId, roles);
@@ -52,8 +63,15 @@ public class AdminService {
         );
     }
 
+    public Map<String, Object> getApplicationForReviewFallback(Long applicationId, String userId, String roles, Throwable t) {
+        log.error("Fallback: service unavailable for getApplicationForReview {}", applicationId, t);
+        return Map.of("error", "Service unavailable");
+    }
+
     // ─── Decisions ────────────────────────────────────────────────────────────
 
+    @CircuitBreaker(name = "applicationServiceCB", fallbackMethod = "approveApplicationFallback")
+    @Retry(name = "applicationServiceCB")
     public Decision approveApplication(Long applicationId, Long adminId, ApproveRequest request, String roles) {
         if (roles == null || !roles.contains("ROLE_ADMIN")) {
             throw new RuntimeException("Access Denied: Only ADMIN can perform this action");
@@ -77,7 +95,7 @@ public class AdminService {
             if (docs != null) {
                 for (Object docObj : docs) {
                     Map<String, Object> doc = (Map<String, Object>) docObj;
-                    if (!"VERIFIED".equals(doc.get("status"))) {
+                    if (!"VERIFIED".equals(doc.get("verificationStatus"))) {
                         allVerified = false;
                         break;
                     }
@@ -118,6 +136,13 @@ public class AdminService {
         return saved;
     }
 
+    public Decision approveApplicationFallback(Long applicationId, Long adminId, ApproveRequest request, String roles, Throwable t) {
+        log.error("Fallback: service unavailable during approveApplication {}", applicationId, t);
+        throw new RuntimeException("Service unavailable during approval", t);
+    }
+
+    @CircuitBreaker(name = "applicationServiceCB", fallbackMethod = "rejectApplicationFallback")
+    @Retry(name = "applicationServiceCB")
     public Decision rejectApplication(Long applicationId, Long adminId, RejectRequest request, String roles) {
         if (roles == null || !roles.contains("ROLE_ADMIN")) {
             throw new RuntimeException("Access Denied: Only ADMIN can perform this action");
@@ -156,6 +181,11 @@ public class AdminService {
         return saved;
     }
 
+    public Decision rejectApplicationFallback(Long applicationId, Long adminId, RejectRequest request, String roles, Throwable t) {
+        log.error("Fallback: service unavailable during rejectApplication {}", applicationId, t);
+        throw new RuntimeException("Service unavailable during rejection", t);
+    }
+
     @Transactional(readOnly = true)
     public Decision getDecisionByApplication(Long applicationId) {
         return decisionRepository.findByApplicationId(applicationId)
@@ -164,6 +194,8 @@ public class AdminService {
 
     // ─── Document verification via Feign ─────────────────────────────────────
 
+    @CircuitBreaker(name = "documentServiceCB", fallbackMethod = "verifyDocumentFallback")
+    @Retry(name = "documentServiceCB")
     public Object verifyDocumentViaFeign(Long documentId, Long adminId, String remarks) {
         if (remarks == null) {
             remarks = "Verified by admin";
@@ -182,6 +214,13 @@ public class AdminService {
         return result;
     }
 
+    public Object verifyDocumentFallback(Long documentId, Long adminId, String remarks, Throwable t) {
+        log.error("Fallback: service unavailable during verifyDocument {}", documentId, t);
+        throw new RuntimeException("Service unavailable during document verification", t);
+    }
+
+    @CircuitBreaker(name = "documentServiceCB", fallbackMethod = "rejectDocumentFallback")
+    @Retry(name = "documentServiceCB")
     public Object rejectDocumentViaFeign(Long documentId, Long adminId, String remarks) {
         if (remarks == null) {
             remarks = "Rejected by admin";
@@ -198,6 +237,11 @@ public class AdminService {
               "Rejected document " + documentId + ". Remarks: " + remarks);
 
         return result;
+    }
+
+    public Object rejectDocumentFallback(Long documentId, Long adminId, String remarks, Throwable t) {
+        log.error("Fallback: service unavailable during rejectDocument {}", documentId, t);
+        throw new RuntimeException("Service unavailable during document rejection", t);
     }
 
     // ─── Audit Log ────────────────────────────────────────────────────────────
