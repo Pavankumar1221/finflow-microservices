@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 @RestControllerAdvice
 @Slf4j
@@ -34,6 +35,13 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(Map.of("timestamp", LocalDateTime.now().toString(),
                              "status", 400, "message", "Validation failed", "errors", errors));
+    }
+
+    @ExceptionHandler(NoSuchElementException.class)
+    public ResponseEntity<Map<String, Object>> handleNotFound(NoSuchElementException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of("timestamp", LocalDateTime.now().toString(),
+                             "status", 404, "message", ex.getMessage()));
     }
 
     @ExceptionHandler(Exception.class)

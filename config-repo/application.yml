@@ -13,6 +13,8 @@ eureka:
     lease-expiration-duration-in-seconds: 30
 
 spring:
+  cache:
+    type: simple
   rabbitmq:
     host: localhost
     port: 5672

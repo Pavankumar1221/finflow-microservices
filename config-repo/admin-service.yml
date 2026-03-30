@@ -6,6 +6,17 @@ server:
 spring:
   application:
     name: admin-service
+  mail:
+    host: ${MAIL_HOST:}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
   datasource:
     url: jdbc:mysql://localhost:3306/finflow_admin?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true
     username: pavan
@@ -64,6 +75,11 @@ resilience4j:
       authServiceCB:
         maxAttempts: 3
         waitDuration: 2s
+
+finflow:
+  mail:
+    enabled: ${FINFLOW_MAIL_ENABLED:false}
+    from: ${FINFLOW_MAIL_FROM:${MAIL_USERNAME:no-reply@finflow.local}}
 
 info:
   app:

@@ -13,14 +13,23 @@ spring:
           enabled: true
           lower-case-service-id: true
       routes:
-
-        # ── Auth Service (public) ─────────────────────────────────────────────
         - id: auth-service
           uri: lb://auth-service
           predicates:
             - Path=/auth/**
+          filters:
+            - name: AuthenticationFilter
 
-        # ── Application Service (secured) ─────────────────────────────────────
+        - id: product-service-exact
+          uri: lb://application-service
+          predicates:
+            - Path=/products
+
+        - id: product-service-sub
+          uri: lb://application-service
+          predicates:
+            - Path=/products/**
+
         - id: application-service
           uri: lb://application-service
           predicates:
@@ -28,7 +37,6 @@ spring:
           filters:
             - name: AuthenticationFilter
 
-        # ── Document Service (secured) ─────────────────────────────────────────
         - id: document-service
           uri: lb://document-service
           predicates:
@@ -36,7 +44,6 @@ spring:
           filters:
             - name: AuthenticationFilter
 
-        # ── Admin Service (secured) ────────────────────────────────────────────
         - id: admin-service
           uri: lb://admin-service
           predicates:
@@ -44,7 +51,6 @@ spring:
           filters:
             - name: AuthenticationFilter
 
-        # ── Auth Service Swagger (public) ─────────────────────────────────────
         - id: auth-service-swagger-ui
           uri: lb://auth-service
           predicates:
@@ -59,7 +65,6 @@ spring:
           filters:
             - RewritePath=/auth-service/(?<segment>.*), /$\{segment}
 
-        # ── Application Service Swagger (public) ──────────────────────────────
         - id: application-service-swagger-ui
           uri: lb://application-service
           predicates:
@@ -74,7 +79,6 @@ spring:
           filters:
             - RewritePath=/application-service/(?<segment>.*), /$\{segment}
 
-        # ── Document Service Swagger (public) ─────────────────────────────────
         - id: document-service-swagger-ui
           uri: lb://document-service
           predicates:
@@ -89,7 +93,6 @@ spring:
           filters:
             - RewritePath=/document-service/(?<segment>.*), /$\{segment}
 
-        # ── Admin Service Swagger (public) ────────────────────────────────────
         - id: admin-service-swagger-ui
           uri: lb://admin-service
           predicates:

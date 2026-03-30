@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.metadata/.plugins/org.eclipse.egit.core/.org.eclipse.egit.core.cmp/.org.eclipse.egit.core.cmp.iml" filepath="$PROJECT_DIR$/.metadata/.plugins/org.eclipse.egit.core/.org.eclipse.egit.core.cmp/.org.eclipse.egit.core.cmp.iml" />
+      <module fileurl="file://$PROJECT_DIR$/FinFlow.iml" filepath="$PROJECT_DIR$/FinFlow.iml" />
+      <module fileurl="file://$PROJECT_DIR$/admin-service/admin-service.iml" filepath="$PROJECT_DIR$/admin-service/admin-service.iml" />
+      <module fileurl="file://$PROJECT_DIR$/api-gateway/api-gateway.iml" filepath="$PROJECT_DIR$/api-gateway/api-gateway.iml" />
+      <module fileurl="file://$PROJECT_DIR$/application-service/application-service.iml" filepath="$PROJECT_DIR$/application-service/application-service.iml" />
+      <module fileurl="file://$PROJECT_DIR$/auth-service/auth-service.iml" filepath="$PROJECT_DIR$/auth-service/auth-service.iml" />
+      <module fileurl="file://$PROJECT_DIR$/config-server/config-server.iml" filepath="$PROJECT_DIR$/config-server/config-server.iml" />
+      <module fileurl="file://$PROJECT_DIR$/document-service/document-service.iml" filepath="$PROJECT_DIR$/document-service/document-service.iml" />
+      <module fileurl="file://$PROJECT_DIR$/eureka-server/eureka-server.iml" filepath="$PROJECT_DIR$/eureka-server/eureka-server.iml" />
+    </modules>
+  </component>
+</project>

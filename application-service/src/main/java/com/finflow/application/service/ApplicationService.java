@@ -1,5 +1,6 @@
 package com.finflow.application.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.finflow.application.config.RabbitMQConfig;
 import com.finflow.application.dto.*;
 import com.finflow.application.entity.*;
@@ -8,15 +9,28 @@ import com.finflow.application.event.ApplicationSubmittedEvent;
 import com.finflow.application.exception.AccessDeniedException;
 import com.finflow.application.mapper.ApplicationMapper;
 import com.finflow.application.repository.*;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.Period;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -30,7 +44,10 @@ public class ApplicationService {
     private final LoanDetailsRepository loanDetailsRepo;
     private final ApplicationStatusHistoryRepository historyRepo;
     private final RabbitTemplate rabbitTemplate;
+    private final ObjectMapper objectMapper;
+    private final Validator validator;
 
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
     public LoanApplication createDraft(Long applicantId) {
         String appNumber = generateAppNumber();
         LoanApplication app = LoanApplication.builder()
@@ -45,32 +62,125 @@ public class ApplicationService {
         return saved;
     }
 
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public ApplicantPersonalDetails patchPersonalDetails(Long appId, Long userId, String roles, Map<String, Object> updates) {
+        if (updates == null || updates.isEmpty()) {
+            throw new IllegalArgumentException("At least one personal-details field must be provided");
+        }
+        LoanApplication app = getSecuredApplication(appId, userId, roles);
+        ApplicantPersonalDetails details = personalRepo.findByApplicationId(app.getId())
+                .orElseGet(() -> ApplicantPersonalDetails.builder().applicationId(app.getId()).build());
+
+        updates.forEach((field, value) -> applyPersonalField(details, field, value));
+        validatePersonalDetails(details);
+        return personalRepo.save(details);
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public ApplicantPersonalDetails savePersonalDetails(Long appId, Long userId, String roles, ApplicantPersonalDetails details) {
+        LoanApplication app = getSecuredApplication(appId, userId, roles);
+
+        ApplicantPersonalDetails entity = personalRepo.findByApplicationId(app.getId())
+                .orElseGet(() -> ApplicantPersonalDetails.builder().applicationId(app.getId()).build());
+
+        entity.setFirstName(details.getFirstName());
+        entity.setLastName(details.getLastName());
+        entity.setDob(details.getDob());
+        entity.setGender(details.getGender());
+        entity.setMaritalStatus(details.getMaritalStatus());
+        entity.setAddressLine1(details.getAddressLine1());
+        entity.setAddressLine2(details.getAddressLine2());
+        entity.setCity(details.getCity());
+        entity.setState(details.getState());
+        entity.setPincode(details.getPincode());
+        entity.setNationality(details.getNationality());
+        validatePersonalDetails(entity);
+        return personalRepo.save(entity);
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
     public ApplicantPersonalDetails savePersonalDetails(Long appId, ApplicantPersonalDetails details) {
-        assertExists(appId);
-        details.setApplicationId(appId);
-        return personalRepo.findByApplicationId(appId)
-                .map(existing -> { details.setId(existing.getId()); return personalRepo.save(details); })
-                .orElseGet(() -> personalRepo.save(details));
-    }
-
-    public EmploymentDetails saveEmploymentDetails(Long appId, EmploymentDetails details) {
-        assertExists(appId);
-        details.setApplicationId(appId);
-        return employmentRepo.findByApplicationId(appId)
-                .map(existing -> { details.setId(existing.getId()); return employmentRepo.save(details); })
-                .orElseGet(() -> employmentRepo.save(details));
-    }
-
-    public LoanDetails saveLoanDetails(Long appId, LoanDetails details) {
-        assertExists(appId);
-        details.setApplicationId(appId);
-        return loanDetailsRepo.findByApplicationId(appId)
-                .map(existing -> { details.setId(existing.getId()); return loanDetailsRepo.save(details); })
-                .orElseGet(() -> loanDetailsRepo.save(details));
-    }
-
-    public LoanApplication submitApplication(Long appId, Long userId) {
         LoanApplication app = getApplication(appId);
+        return savePersonalDetails(appId, app.getApplicantId(), "ROLE_APPLICANT", details);
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public EmploymentDetails patchEmploymentDetails(Long appId, Long userId, String roles, Map<String, Object> updates) {
+        if (updates == null || updates.isEmpty()) {
+            throw new IllegalArgumentException("At least one employment-details field must be provided");
+        }
+        LoanApplication app = getSecuredApplication(appId, userId, roles);
+        EmploymentDetails details = employmentRepo.findByApplicationId(app.getId())
+                .orElseGet(() -> EmploymentDetails.builder().applicationId(app.getId()).build());
+
+        updates.forEach((field, value) -> applyEmploymentField(details, field, value));
+        validateEmploymentDetails(details);
+        return employmentRepo.save(details);
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public EmploymentDetails saveEmploymentDetails(Long appId, Long userId, String roles, EmploymentDetails details) {
+        LoanApplication app = getSecuredApplication(appId, userId, roles);
+
+        EmploymentDetails entity = employmentRepo.findByApplicationId(app.getId())
+                .orElseGet(() -> EmploymentDetails.builder().applicationId(app.getId()).build());
+
+        entity.setEmploymentType(details.getEmploymentType());
+        entity.setCompanyName(details.getCompanyName());
+        entity.setDesignation(details.getDesignation());
+        entity.setMonthlyIncome(details.getMonthlyIncome());
+        entity.setTotalWorkExperience(details.getTotalWorkExperience());
+        entity.setOfficeAddress(details.getOfficeAddress());
+        entity.setEmploymentStatus(details.getEmploymentStatus());
+        validateEmploymentDetails(entity);
+        return employmentRepo.save(entity);
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public EmploymentDetails saveEmploymentDetails(Long appId, EmploymentDetails details) {
+        LoanApplication app = getApplication(appId);
+        return saveEmploymentDetails(appId, app.getApplicantId(), "ROLE_APPLICANT", details);
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public LoanDetails patchLoanDetails(Long appId, Long userId, String roles, Map<String, Object> updates) {
+        if (updates == null || updates.isEmpty()) {
+            throw new IllegalArgumentException("At least one loan-details field must be provided");
+        }
+        LoanApplication app = getSecuredApplication(appId, userId, roles);
+        LoanDetails details = loanDetailsRepo.findByApplicationId(app.getId())
+                .orElseGet(() -> LoanDetails.builder().applicationId(app.getId()).build());
+
+        updates.forEach((field, value) -> applyLoanField(details, field, value));
+        validateLoanDetails(details);
+        return loanDetailsRepo.save(details);
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public LoanDetails saveLoanDetails(Long appId, Long userId, String roles, LoanDetails details) {
+        LoanApplication app = getSecuredApplication(appId, userId, roles);
+
+        LoanDetails entity = loanDetailsRepo.findByApplicationId(app.getId())
+                .orElseGet(() -> LoanDetails.builder().applicationId(app.getId()).build());
+
+        entity.setLoanType(details.getLoanType());
+        entity.setLoanAmountRequested(details.getLoanAmountRequested());
+        entity.setTenureMonths(details.getTenureMonths());
+        entity.setPurpose(details.getPurpose());
+        entity.setRepaymentType(details.getRepaymentType());
+        validateLoanDetails(entity);
+        return loanDetailsRepo.save(entity);
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public LoanDetails saveLoanDetails(Long appId, LoanDetails details) {
+        LoanApplication app = getApplication(appId);
+        return saveLoanDetails(appId, app.getApplicantId(), "ROLE_APPLICANT", details);
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public LoanApplication submitApplication(Long appId, Long userId, String roles) {
+        LoanApplication app = getSecuredApplication(appId, userId, roles);
         if (app.getStatus() != ApplicationStatus.DRAFT) {
             throw new RuntimeException("Only DRAFT applications can be submitted");
         }
@@ -95,10 +205,16 @@ public class ApplicationService {
         return saved;
     }
 
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public LoanApplication submitApplication(Long appId, Long userId) {
+        return submitApplication(appId, userId, "ROLE_APPLICANT");
+    }
+
     @Transactional(readOnly = true)
+    @org.springframework.cache.annotation.Cacheable(value = "applications-cache", key = "#appId")
     public LoanApplication getApplication(Long appId) {
-        return applicationRepo.findById(appId)
-                .orElseThrow(() -> new RuntimeException("Application not found with id: " + appId));
+        return applicationRepo.findByIdAndDeletedFalse(appId)
+                .orElseThrow(() -> new NoSuchElementException("Application not found with id: " + appId));
     }
 
     @Transactional(readOnly = true)
@@ -113,6 +229,7 @@ public class ApplicationService {
     }
 
     @Transactional(readOnly = true)
+    @org.springframework.cache.annotation.Cacheable(value = "applications-cache", key = "'status-' + #appId")
     public ApplicationStatusResponse getStatusDto(Long appId, ApplicationMapper mapper, Long userId, String roles) {
         LoanApplication app = getSecuredApplication(appId, userId, roles);
         List<ApplicationStatusHistory> history = historyRepo.findByApplicationIdOrderByChangedAtDesc(appId);
@@ -123,30 +240,37 @@ public class ApplicationService {
     }
 
     @Transactional(readOnly = true)
+    @org.springframework.cache.annotation.Cacheable(
+            value = "applications-cache",
+            key = "'applicant-' + #applicantId + '-' + #pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort.toString()")
+    public Page<LoanApplication> getApplicationsByApplicant(Long applicantId, Pageable pageable) {
+        return applicationRepo.findByApplicantIdAndDeletedFalse(applicantId, pageable);
+    }
+
+    @Transactional(readOnly = true)
     public List<LoanApplication> getApplicationsByApplicant(Long applicantId) {
-        return applicationRepo.findByApplicantId(applicantId);
+        return getApplicationsByApplicant(applicantId, PageRequest.of(0, 1000)).getContent();
+    }
+
+    @Transactional(readOnly = true)
+    @org.springframework.cache.annotation.Cacheable(
+            value = "applications-cache",
+            key = "'all-' + #pageable.pageNumber + '-' + #pageable.pageSize + '-' + #pageable.sort.toString()")
+    public Page<LoanApplication> getAllApplications(String roles, Pageable pageable) {
+        if (roles == null || !roles.contains("ROLE_ADMIN")) {
+            throw new AccessDeniedException("Access Denied: Only administrators can view all applications");
+        }
+        return applicationRepo.findByDeletedFalse(pageable);
     }
 
     @Transactional(readOnly = true)
     public List<LoanApplication> getAllApplications(String roles) {
-        if (roles == null || !roles.contains("ROLE_ADMIN")) {
-            throw new AccessDeniedException("Access Denied: Only administrators can view all applications");
-        }
-        return applicationRepo.findAll();
+        return getAllApplications(roles, PageRequest.of(0, 1000)).getContent();
     }
 
     @Transactional(readOnly = true)
     public LoanApplication getSecuredApplication(Long appId, Long userId, String roles) {
-        LoanApplication app;
-        if (roles != null && roles.contains("ROLE_ADMIN")) {
-            app = applicationRepo.findById(appId)
-                    .orElseThrow(() -> new RuntimeException("Application not found with id: " + appId));
-        } else if (userId != null) {
-            app = applicationRepo.findByIdAndApplicantId(appId, userId)
-                    .orElseThrow(() -> new AccessDeniedException("Access Denied: Application not found or you do not have permission"));
-        } else {
-            throw new AccessDeniedException("Access Denied: Missing user identity");
-        }
+        LoanApplication app = getApplication(appId);
         validateOwnership(app, userId, roles);
         return app;
     }
@@ -161,6 +285,24 @@ public class ApplicationService {
         throw new AccessDeniedException("Access Denied: You do not have permission to access this application");
     }
 
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
+    public void softDeleteApplication(Long appId, Long userId, String roles) {
+        LoanApplication app = getSecuredApplication(appId, userId, roles);
+        if (app.isDeleted()) {
+            return;
+        }
+
+        String from = app.getStatus().name();
+        app.setDeleted(true);
+        app.setStatus(ApplicationStatus.CANCELLED);
+        app.setCurrentStage("Cancelled");
+        applicationRepo.save(app);
+
+        recordHistory(appId, from, ApplicationStatus.CANCELLED.name(), userId, "ROLE_APPLICANT",
+                "Application cancelled by applicant");
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "applications-cache", allEntries = true)
     public LoanApplication updateStatus(Long appId, String toStatus, Long changedBy, String role, String remarks) {
         LoanApplication app = getApplication(appId);
         String from = app.getStatus().name();
@@ -168,12 +310,6 @@ public class ApplicationService {
         LoanApplication saved = applicationRepo.save(app);
         recordHistory(appId, from, toStatus, changedBy, role, remarks);
         return saved;
-    }
-
-    private void assertExists(Long appId) {
-        if (!applicationRepo.existsById(appId)) {
-            throw new RuntimeException("Application not found with id: " + appId);
-        }
     }
 
     private void recordHistory(Long appId, String from, String to, Long userId, String role, String remarks) {
@@ -191,12 +327,12 @@ public class ApplicationService {
 
     @Transactional(readOnly = true)
     public java.util.Map<String, Object> getReports() {
-        long total = applicationRepo.count();
-        long draft = applicationRepo.findByStatus(ApplicationStatus.DRAFT).size();
-        long submitted = applicationRepo.findByStatus(ApplicationStatus.SUBMITTED).size();
-        long verified = applicationRepo.findByStatus(ApplicationStatus.DOCS_VERIFIED).size();
-        long approved = applicationRepo.findByStatus(ApplicationStatus.APPROVED).size();
-        long rejected = applicationRepo.findByStatus(ApplicationStatus.REJECTED).size();
+        long total = applicationRepo.countByDeletedFalse();
+        long draft = applicationRepo.countByStatusAndDeletedFalse(ApplicationStatus.DRAFT);
+        long submitted = applicationRepo.countByStatusAndDeletedFalse(ApplicationStatus.SUBMITTED);
+        long verified = applicationRepo.countByStatusAndDeletedFalse(ApplicationStatus.DOCS_VERIFIED);
+        long approved = applicationRepo.countByStatusAndDeletedFalse(ApplicationStatus.APPROVED);
+        long rejected = applicationRepo.countByStatusAndDeletedFalse(ApplicationStatus.REJECTED);
 
         double approvalRate = total > 0 ? (approved * 100.0) / total : 0;
         double rejectionRate = total > 0 ? (rejected * 100.0) / total : 0;
@@ -216,5 +352,99 @@ public class ApplicationService {
                 "January", 10, "February", 15, "March", total
             )
         );
+    }
+
+    private void applyPersonalField(ApplicantPersonalDetails details, String field, Object value) {
+        switch (field) {
+            case "firstName" -> details.setFirstName(asString(value));
+            case "lastName" -> details.setLastName(asString(value));
+            case "dob" -> details.setDob(asLocalDate(value));
+            case "gender" -> details.setGender(asEnum(ApplicantPersonalDetails.Gender.class, value));
+            case "maritalStatus" -> details.setMaritalStatus(asEnum(ApplicantPersonalDetails.MaritalStatus.class, value));
+            case "addressLine1" -> details.setAddressLine1(asString(value));
+            case "addressLine2" -> details.setAddressLine2(asString(value));
+            case "city" -> details.setCity(asString(value));
+            case "state" -> details.setState(asString(value));
+            case "pincode" -> details.setPincode(asString(value));
+            case "nationality" -> details.setNationality(asString(value));
+            default -> throw new IllegalArgumentException("Unsupported personal-details field: " + field);
+        }
+    }
+
+    private void applyEmploymentField(EmploymentDetails details, String field, Object value) {
+        switch (field) {
+            case "employmentType" -> details.setEmploymentType(asEnum(EmploymentDetails.EmploymentType.class, value));
+            case "companyName" -> details.setCompanyName(asString(value));
+            case "designation" -> details.setDesignation(asString(value));
+            case "monthlyIncome" -> details.setMonthlyIncome(asBigDecimal(value));
+            case "totalWorkExperience" -> details.setTotalWorkExperience(asInteger(value));
+            case "officeAddress" -> details.setOfficeAddress(asString(value));
+            case "employmentStatus" -> details.setEmploymentStatus(asEnum(EmploymentDetails.EmploymentStatus.class, value));
+            default -> throw new IllegalArgumentException("Unsupported employment-details field: " + field);
+        }
+    }
+
+    private void applyLoanField(LoanDetails details, String field, Object value) {
+        switch (field) {
+            case "loanType" -> details.setLoanType(asEnum(LoanDetails.LoanType.class, value));
+            case "loanAmountRequested" -> details.setLoanAmountRequested(asBigDecimal(value));
+            case "tenureMonths" -> details.setTenureMonths(asInteger(value));
+            case "purpose" -> details.setPurpose(asString(value));
+            case "repaymentType" -> details.setRepaymentType(asEnum(LoanDetails.RepaymentType.class, value));
+            default -> throw new IllegalArgumentException("Unsupported loan-details field: " + field);
+        }
+    }
+
+    private String asString(Object value) {
+        return value == null ? null : objectMapper.convertValue(value, String.class);
+    }
+
+    private Integer asInteger(Object value) {
+        return value == null ? null : objectMapper.convertValue(value, Integer.class);
+    }
+
+    private BigDecimal asBigDecimal(Object value) {
+        return value == null ? null : objectMapper.convertValue(value, BigDecimal.class);
+    }
+
+    private LocalDate asLocalDate(Object value) {
+        return value == null ? null : LocalDate.parse(asString(value));
+    }
+
+    private <E extends Enum<E>> E asEnum(Class<E> enumType, Object value) {
+        if (value == null) {
+            return null;
+        }
+        return Enum.valueOf(enumType, asString(value).toUpperCase());
+    }
+
+    private void validatePersonalDetails(ApplicantPersonalDetails details) {
+        validateBean(details);
+        if (details.getDob() == null) {
+            throw new IllegalArgumentException("dob: Date of birth is required");
+        }
+        if (Period.between(details.getDob(), LocalDate.now()).getYears() < 18) {
+            throw new IllegalArgumentException("dob: Applicant must be at least 18 years old");
+        }
+    }
+
+    private void validateEmploymentDetails(EmploymentDetails details) {
+        validateBean(details);
+    }
+
+    private void validateLoanDetails(LoanDetails details) {
+        validateBean(details);
+    }
+
+    private <T> void validateBean(T bean) {
+        Set<ConstraintViolation<T>> violations = validator.validate(bean);
+        if (violations.isEmpty()) {
+            return;
+        }
+        String message = violations.stream()
+                .sorted(Comparator.comparing(v -> v.getPropertyPath().toString()))
+                .map(v -> v.getPropertyPath() + ": " + v.getMessage())
+                .collect(Collectors.joining("; "));
+        throw new IllegalArgumentException(message);
     }
 }

@@ -9,6 +9,8 @@ import com.finflow.application.repository.LoanApplicationRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +21,7 @@ public class ApplicationDecisionListener {
 
     private final LoanApplicationRepository applicationRepo;
     private final ApplicationStatusHistoryRepository historyRepo;
+    private final CacheManager cacheManager;
 
     @RabbitListener(queues = "application.decision.queue")
     @Transactional
@@ -34,10 +37,14 @@ public class ApplicationDecisionListener {
             log.warn("Received decision event for unknown application: {}", appId);
             return;
         }
+        if (app.isDeleted()) {
+            log.warn("Application {} is soft-deleted. Skipping decision event.", appId);
+            return;
+        }
 
         // Idempotency: skip if already in a finalized state
         ApplicationStatus current = app.getStatus();
-        if (current == ApplicationStatus.APPROVED || current == ApplicationStatus.REJECTED) {
+        if (current == ApplicationStatus.APPROVED || current == ApplicationStatus.REJECTED || current == ApplicationStatus.CANCELLED) {
             log.warn("Application {} already finalized as {}. Skipping duplicate event.", appId, current);
             return;
         }
@@ -52,6 +59,7 @@ public class ApplicationDecisionListener {
 
         String from = current.name();
         app.setStatus(targetStatus);
+        app.setCurrentStage(resolveStage(targetStatus));
         applicationRepo.save(app);
 
         historyRepo.save(ApplicationStatusHistory.builder()
@@ -63,6 +71,23 @@ public class ApplicationDecisionListener {
                 .remarks(event.getRemarks())
                 .build());
 
+        evictApplicationCache();
+
         log.info("Application {} status updated to {} via RabbitMQ event from admin {}", appId, event.getStatus(), event.getAdminId());
+    }
+
+    private String resolveStage(ApplicationStatus status) {
+        return switch (status) {
+            case APPROVED -> "Approved";
+            case REJECTED -> "Rejected";
+            default -> "Under Review";
+        };
+    }
+
+    private void evictApplicationCache() {
+        Cache cache = cacheManager.getCache("applications-cache");
+        if (cache != null) {
+            cache.clear();
+        }
     }
 }

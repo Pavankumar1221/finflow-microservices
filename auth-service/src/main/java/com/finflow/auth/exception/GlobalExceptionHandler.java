@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 @RestControllerAdvice
 @Slf4j
@@ -28,6 +29,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleBadCredentials(BadCredentialsException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(errorBody("Invalid email or password", HttpStatus.UNAUTHORIZED));
+    }
+
+    @ExceptionHandler(NoSuchElementException.class)
+    public ResponseEntity<Map<String, Object>> handleNotFound(NoSuchElementException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(errorBody(ex.getMessage(), HttpStatus.NOT_FOUND));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

@@ -36,6 +36,10 @@ public class LoanApplication {
     @Column(name = "submitted_at")
     private LocalDateTime submittedAt;
 
+    @Column(name = "is_deleted", nullable = false)
+    @Builder.Default
+    private boolean deleted = false;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -46,6 +50,6 @@ public class LoanApplication {
 
     public enum ApplicationStatus {
         DRAFT, SUBMITTED, DOCS_PENDING, DOCS_VERIFIED,
-        UNDER_REVIEW, APPROVED, REJECTED, CLOSED
+        UNDER_REVIEW, APPROVED, REJECTED, CLOSED, CANCELLED
     }
 }

@@ -8,4 +8,5 @@ import java.util.List;
 @Repository
 public interface DocumentVerificationHistoryRepository extends JpaRepository<DocumentVerificationHistory, Long> {
     List<DocumentVerificationHistory> findByDocumentIdOrderByVerifiedAtDesc(Long documentId);
+    void deleteByDocumentId(Long documentId);
 }

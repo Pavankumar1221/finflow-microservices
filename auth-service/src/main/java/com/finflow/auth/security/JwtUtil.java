@@ -9,6 +9,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
 
 import java.security.Key;
+import java.time.Instant;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -55,6 +56,10 @@ public class JwtUtil {
 
     public String extractUsername(String token) {
         return getAllClaims(token).getSubject();
+    }
+
+    public Instant extractExpiration(String token) {
+        return getAllClaims(token).getExpiration().toInstant();
     }
 
     public boolean validateToken(String token, UserDetails userDetails) {

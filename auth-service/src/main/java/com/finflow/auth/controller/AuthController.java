@@ -1,17 +1,20 @@
 package com.finflow.auth.controller;
 
 import com.finflow.auth.dto.AuthResponse;
+import com.finflow.auth.dto.ChangePasswordRequest;
 import com.finflow.auth.dto.LoginRequest;
 import com.finflow.auth.dto.RegisterRequest;
+import com.finflow.auth.dto.TokenStatusRequest;
 import com.finflow.auth.dto.UserResponse;
 import com.finflow.auth.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -43,11 +46,27 @@ public class AuthController {
         return ResponseEntity.ok(Map.of("valid", true, "message", "Token is valid"));
     }
 
-    @GetMapping("/users/{id}")
-    @Operation(summary = "Get user by ID (Admin only)")
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
-    public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
-        return ResponseEntity.ok(authService.getUserById(id));
+    @GetMapping("/my")
+    @Operation(summary = "Get the profile of the currently authenticated user")
+    public ResponseEntity<UserResponse> getMyProfile(Authentication authentication) {
+        Long userId = Long.valueOf(authentication.getName());
+        return ResponseEntity.ok(authService.getMyProfile(userId));
+    }
+
+    @PostMapping("/logout")
+    @Operation(summary = "Logout the current user by invalidating the current JWT")
+    public ResponseEntity<Map<String, Object>> logout(
+            @Parameter(hidden = true) @RequestHeader("Authorization") String authHeader) {
+        return ResponseEntity.ok(authService.logout(authHeader));
+    }
+
+    @PostMapping("/change-password")
+    @Operation(summary = "Change password for the currently authenticated user")
+    public ResponseEntity<Map<String, Object>> changePassword(
+            Authentication authentication,
+            @Valid @RequestBody ChangePasswordRequest request) {
+        Long userId = Long.valueOf(authentication.getName());
+        return ResponseEntity.ok(authService.changePassword(userId, request));
     }
 
     @GetMapping("/internal/users")
@@ -58,6 +77,30 @@ public class AuthController {
         if (forwardedHost != null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         if (!"admin-service".equals(internalCall)) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         return ResponseEntity.ok(authService.getAllUsersInternal());
+    }
+
+    @GetMapping("/internal/users/{id}")
+    @Operation(summary = "Internal: Get one user", hidden = true)
+    public ResponseEntity<Map<String, Object>> getUserInternal(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-Internal-Call", required = false) String internalCall,
+            @RequestHeader(value = "X-Forwarded-Host", required = false) String forwardedHost) {
+        if (forwardedHost != null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (!"admin-service".equals(internalCall) && !"document-service".equals(internalCall)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        return ResponseEntity.ok(authService.getUserInternal(id));
+    }
+
+    @PostMapping("/internal/token/blacklisted")
+    @Operation(summary = "Internal: Check whether a token is blacklisted", hidden = true)
+    public ResponseEntity<Map<String, Object>> isTokenBlacklisted(
+            @Valid @RequestBody TokenStatusRequest request,
+            @RequestHeader(value = "X-Internal-Call", required = false) String internalCall,
+            @RequestHeader(value = "X-Forwarded-Host", required = false) String forwardedHost) {
+        if (forwardedHost != null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (!"api-gateway".equals(internalCall)) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        return ResponseEntity.ok(authService.isTokenBlacklisted(request));
     }
 
     @PutMapping("/internal/users/{id}")

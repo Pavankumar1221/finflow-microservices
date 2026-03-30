@@ -21,7 +21,7 @@ public class ReportController {
     private final ReportService reportService;
 
     @GetMapping
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Get aggregated system data reports")
     public ResponseEntity<Map<String, Object>> getReports() {
         return ResponseEntity.ok(reportService.getAggregatedReports());

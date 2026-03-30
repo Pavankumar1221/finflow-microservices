@@ -21,6 +21,8 @@ spring:
           uri: lb://auth-service
           predicates:
             - Path=/auth/**
+          filters:
+            - name: AuthenticationFilter
 
         # ════════════════════════════════════════════════════════════════
         # PRODUCTS API (public — routed to application-service)

@@ -1,7 +1,8 @@
 package com.finflow.admin.controller;
 
-import com.finflow.admin.dto.*;
-import com.finflow.admin.feign.AuthServiceClient;
+import com.finflow.admin.dto.AuditLogResponse;
+import com.finflow.admin.dto.DecisionRequest;
+import com.finflow.admin.dto.DecisionResponse;
 import com.finflow.admin.mapper.AdminMapper;
 import com.finflow.admin.service.AdminService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -10,11 +11,17 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
@@ -28,16 +35,14 @@ public class AdminController {
 
     private final AdminService adminService;
     private final AdminMapper mapper;
-    private final AuthServiceClient authServiceClient;
-
-    // ─── Applications ─────────────────────────────────────────────────────────
 
     @GetMapping("/applications")
     @Operation(summary = "Get all loan applications")
-    public ResponseEntity<List<Object>> getAllApplications(
+    public ResponseEntity<Page<Object>> getAllApplications(
             @Parameter(hidden = true) @RequestHeader("X-User-Id") String userId,
-            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
-        return ResponseEntity.ok(adminService.getAllApplications(userId, roles));
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles,
+            Pageable pageable) {
+        return ResponseEntity.ok(adminService.getAllApplications(userId, roles, pageable));
     }
 
     @GetMapping("/applications/{id}/review")
@@ -49,30 +54,6 @@ public class AdminController {
         return ResponseEntity.ok(adminService.getApplicationForReview(id, userId, roles));
     }
 
-    // ─── Decisions ────────────────────────────────────────────────────────────
-
-    @PostMapping("/applications/{id}/approve")
-    @Operation(summary = "Approve a loan application")
-    public ResponseEntity<DecisionResponse> approve(
-            @PathVariable Long id,
-            @Valid @RequestBody ApproveRequest request,
-            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long adminId,
-            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
-        return ResponseEntity.ok(mapper.toResponse(
-                adminService.approveApplication(id, adminId, request, roles)));
-    }
-
-    @PostMapping("/applications/{id}/reject")
-    @Operation(summary = "Reject a loan application")
-    public ResponseEntity<DecisionResponse> reject(
-            @PathVariable Long id,
-            @Valid @RequestBody RejectRequest request,
-            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long adminId,
-            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
-        return ResponseEntity.ok(mapper.toResponse(
-                adminService.rejectApplication(id, adminId, request, roles)));
-    }
-
     @GetMapping("/applications/{id}/decision")
     @Operation(summary = "Get decision for a specific application")
     public ResponseEntity<DecisionResponse> getDecision(@PathVariable Long id) {
@@ -80,41 +61,20 @@ public class AdminController {
     }
 
     @PostMapping("/applications/{id}/decision")
-    @Operation(summary = "Make a unified decision (Approve/Reject)")
+    @Operation(summary = "Make a unified decision (APPROVED or REJECTED)")
     public ResponseEntity<DecisionResponse> makeDecision(
             @PathVariable Long id,
-            @RequestBody Map<String, Object> request,
+            @Valid @RequestBody DecisionRequest request,
             @Parameter(hidden = true) @RequestHeader("X-User-Id") Long adminId,
             @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
-        
-        String decisionStr = (String) request.get("decision");
-        String remarks = (String) request.get("remarks");
-
-        if ("APPROVED".equalsIgnoreCase(decisionStr)) {
-            ApproveRequest approveReq = new ApproveRequest();
-            approveReq.setDecisionReason(remarks);
-            // Setting some safe defaults if required by ApproveRequest validation
-            if (approveReq.getApprovedAmount() == null) approveReq.setApprovedAmount(java.math.BigDecimal.ZERO);
-            if (approveReq.getApprovedTenureMonths() == null) approveReq.setApprovedTenureMonths(0);
-            if (approveReq.getInterestRate() == null) approveReq.setInterestRate(java.math.BigDecimal.ZERO);
-            return ResponseEntity.ok(mapper.toResponse(
-                    adminService.approveApplication(id, adminId, approveReq, roles)));
-        } else if ("REJECTED".equalsIgnoreCase(decisionStr)) {
-            RejectRequest rejectReq = new RejectRequest();
-            rejectReq.setDecisionReason(remarks);
-            return ResponseEntity.ok(mapper.toResponse(
-                    adminService.rejectApplication(id, adminId, rejectReq, roles)));
-        } else {
-            throw new IllegalArgumentException("Invalid decision: " + decisionStr);
-        }
+        return ResponseEntity.ok(mapper.toResponse(
+                adminService.makeDecision(id, adminId, request, roles)));
     }
-
-    // ─── User Management ──────────────────────────────────────────────────────
 
     @GetMapping("/users")
     @Operation(summary = "Get all users with roles and details")
     public ResponseEntity<List<Map<String, Object>>> getAllUsers() {
-        return ResponseEntity.ok(authServiceClient.getAllUsers("admin-service"));
+        return ResponseEntity.ok(adminService.getAllUsers());
     }
 
     @PutMapping("/users/{id}")
@@ -122,10 +82,8 @@ public class AdminController {
     public ResponseEntity<Map<String, Object>> updateUser(
             @PathVariable Long id,
             @RequestBody Map<String, Object> updateRequest) {
-        return ResponseEntity.ok(authServiceClient.updateUser(id, updateRequest, "admin-service"));
+        return ResponseEntity.ok(adminService.updateUser(id, updateRequest));
     }
-
-    // ─── Document verification ────────────────────────────────────────────────
 
     @PutMapping("/documents/{documentId}/verify")
     @Operation(summary = "Verify a document via Admin")
@@ -145,16 +103,10 @@ public class AdminController {
         return ResponseEntity.ok(adminService.rejectDocumentViaFeign(documentId, adminId, body.get("remarks")));
     }
 
-    // ─── Audit Log ────────────────────────────────────────────────────────────
-
     @GetMapping("/audit-log")
     @Operation(summary = "Get admin audit log (paginated)")
-    public ResponseEntity<Page<AuditLogResponse>> getAuditLog(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
-        return ResponseEntity.ok(
-                adminService.getAuditLogs(PageRequest.of(page, size, Sort.by("actionAt").descending()))
-                        .map(mapper::toResponse));
+    public ResponseEntity<Page<AuditLogResponse>> getAuditLog(Pageable pageable) {
+        return ResponseEntity.ok(adminService.getAuditLogs(pageable).map(mapper::toResponse));
     }
 
     @GetMapping("/health")

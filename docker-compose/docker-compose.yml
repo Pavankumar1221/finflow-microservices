@@ -11,11 +11,9 @@
 #   5. api-gateway                     (depends: eureka-server healthy)
 #   6. auth / application / document / admin  (depends: mysql + rabbitmq + eureka-server)
 # ================================================================
-
 networks:
   finflow-network:
     driver: bridge
-
 volumes:
   mysql-data:
     driver: local
@@ -27,9 +25,7 @@ volumes:
     driver: local
   document-uploads:
     driver: local
-
 services:
-
   # ──────────────────────────────────────────────────────────────
   # INFRASTRUCTURE — MySQL
   # ──────────────────────────────────────────────────────────────
@@ -56,7 +52,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
-
   # ──────────────────────────────────────────────────────────────
   # INFRASTRUCTURE — RabbitMQ
   # ──────────────────────────────────────────────────────────────
@@ -80,7 +75,23 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
-
+  # ──────────────────────────────────────────────────────────────
+  # INFRASTRUCTURE — Zipkin (distributed tracing)
+  # ──────────────────────────────────────────────────────────────
+  zipkin:
+    image: openzipkin/zipkin:latest
+    container_name: finflow-zipkin
+    restart: unless-stopped
+    ports:
+      - "9411:9411"
+    networks:
+      - finflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --tries=1 -O- http://localhost:9411/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
   # ──────────────────────────────────────────────────────────────
   # INFRASTRUCTURE — Loki (log aggregation)
   # ──────────────────────────────────────────────────────────────
@@ -102,7 +113,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
-
   # ──────────────────────────────────────────────────────────────
   # INFRASTRUCTURE — Grafana (log visualisation)
   # ──────────────────────────────────────────────────────────────
@@ -134,7 +144,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-
   # ──────────────────────────────────────────────────────────────
   # MICROSERVICES — Config Server  (port 7001)
   # Clones config from GitHub: Pavankumar1221/finflow-config-repo
@@ -147,15 +156,18 @@ services:
     container_name: finflow-config-server
     restart: unless-stopped
     environment:
+      SPRING_PROFILES_ACTIVE: native
+      SPRING_CLOUD_CONFIG_SERVER_NATIVE_SEARCH_LOCATIONS: file:/config-repo
       # Override Eureka URL: config-server also registers with Eureka
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
       # Loki log shipping: override the default localhost URL
       LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
-      # GitHub config repo (kept as-is — public repo, internet accessible in Docker)
-      SPRING_CLOUD_CONFIG_SERVER_GIT_URI: ${CONFIG_SERVER_GIT_URI}
-      SPRING_CLOUD_CONFIG_SERVER_GIT_DEFAULT-LABEL: ${CONFIG_SERVER_GIT_BRANCH}
+      # Zipkin
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
     ports:
       - "7001:7001"
+    volumes:
+      - ../config-repo:/config-repo:ro
     networks:
       - finflow-network
     healthcheck:
@@ -164,7 +176,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
-
   # ──────────────────────────────────────────────────────────────
   # MICROSERVICES — Eureka Server  (port 7002)
   # ──────────────────────────────────────────────────────────────
@@ -183,6 +194,8 @@ services:
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
       # Loki
       LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      # Zipkin
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
     ports:
       - "7002:7002"
     depends_on:
@@ -196,7 +209,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
-
   # ──────────────────────────────────────────────────────────────
   # MICROSERVICES — API Gateway  (port 7003)
   # ──────────────────────────────────────────────────────────────
@@ -211,6 +223,7 @@ services:
       SPRING_CONFIG_IMPORT: optional:configserver:http://config-server:7001
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:7002/eureka/
       LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
       # JWT secret (matches all services)
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRATION: ${JWT_EXPIRATION}
@@ -227,7 +240,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
-
   # ──────────────────────────────────────────────────────────────
   # MICROSERVICES — Auth Service  (port 7004)
   # ──────────────────────────────────────────────────────────────
@@ -255,6 +267,8 @@ services:
       JWT_EXPIRATION: ${JWT_EXPIRATION}
       # Loki
       LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      # Zipkin
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
       # Force env-vars to override Config Server values (Spring Cloud Config override)
       SPRING_CLOUD_CONFIG_OVERRIDE_NONE: "true"
     ports:
@@ -274,7 +288,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 90s
-
   # ──────────────────────────────────────────────────────────────
   # MICROSERVICES — Application Service  (port 7005)
   # ──────────────────────────────────────────────────────────────
@@ -296,6 +309,7 @@ services:
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
       # Force env-vars to override Config Server values
       SPRING_CLOUD_CONFIG_OVERRIDE_NONE: "true"
     ports:
@@ -315,7 +329,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 90s
-
   # ──────────────────────────────────────────────────────────────
   # MICROSERVICES — Document Service  (port 7006)
   # ──────────────────────────────────────────────────────────────
@@ -338,7 +351,14 @@ services:
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       # Override Windows file path → Docker volume mount path
       DOCUMENT_UPLOAD_PATH: /app/uploads/
+      FINFLOW_MAIL_ENABLED: ${FINFLOW_MAIL_ENABLED}
+      MAIL_HOST: ${MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      FINFLOW_MAIL_FROM: ${FINFLOW_MAIL_FROM}
       LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
       # Force env-vars to override Config Server values
       SPRING_CLOUD_CONFIG_OVERRIDE_NONE: "true"
     ports:
@@ -360,7 +380,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 90s
-
   # ──────────────────────────────────────────────────────────────
   # MICROSERVICES — Admin Service  (port 7007)
   # ──────────────────────────────────────────────────────────────
@@ -381,8 +400,15 @@ services:
       SPRING_RABBITMQ_PORT: 5672
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      FINFLOW_MAIL_ENABLED: ${FINFLOW_MAIL_ENABLED}
+      MAIL_HOST: ${MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      FINFLOW_MAIL_FROM: ${FINFLOW_MAIL_FROM}
       LOGGING_LOKI_URL: http://loki:3100/loki/api/v1/push
       LOGGING_LOKI_URL_ADMIN: http://loki:3100/loki/api/v1/push
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
       # Force env-vars to override Config Server values
       SPRING_CLOUD_CONFIG_OVERRIDE_NONE: "true"
     ports:

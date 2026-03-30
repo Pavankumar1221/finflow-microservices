@@ -24,6 +24,16 @@ public class ApplicationServiceClientFallback implements ApplicationServiceClien
     }
 
     @Override
+    public Map<String, Object> getAllApplications(String userId, String roles, int page, int size, List<String> sort) {
+        log.warn("Fallback: Could not fetch all applications");
+        return Map.of(
+                "content", Collections.emptyList(),
+                "totalElements", 0,
+                "number", page,
+                "size", size
+        );
+    }
+
     public List<Object> getAllApplications(String userId, String roles) {
         log.warn("Fallback: Could not fetch all applications");
         return Collections.emptyList();

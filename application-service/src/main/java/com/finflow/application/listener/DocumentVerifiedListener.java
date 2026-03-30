@@ -8,6 +8,8 @@ import com.finflow.application.repository.LoanApplicationRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +22,7 @@ public class DocumentVerifiedListener {
 
     private final LoanApplicationRepository applicationRepo;
     private final ApplicationStatusHistoryRepository historyRepo;
+    private final CacheManager cacheManager;
 
     @RabbitListener(queues = "documents.verified.queue")
     @Transactional
@@ -49,16 +52,22 @@ public class DocumentVerifiedListener {
             log.warn("Received document verified event for unknown application: {}", appId);
             return;
         }
+        if (app.isDeleted()) {
+            log.warn("Application {} is soft-deleted. Skipping document-verified event.", appId);
+            return;
+        }
 
         ApplicationStatus current = app.getStatus();
         // Idempotency: do not overwrite if already DOCS_VERIFIED, APPROVED, or REJECTED
-        if (current == ApplicationStatus.DOCS_VERIFIED || current == ApplicationStatus.APPROVED || current == ApplicationStatus.REJECTED) {
+        if (current == ApplicationStatus.DOCS_VERIFIED || current == ApplicationStatus.APPROVED
+                || current == ApplicationStatus.REJECTED || current == ApplicationStatus.CANCELLED) {
             log.warn("Application {} already processed (status: {}). Skipping event.", appId, current);
             return;
         }
 
         String from = current.name();
         app.setStatus(ApplicationStatus.DOCS_VERIFIED);
+        app.setCurrentStage("Under Review");
         applicationRepo.save(app);
 
         historyRepo.save(ApplicationStatusHistory.builder()
@@ -70,6 +79,15 @@ public class DocumentVerifiedListener {
                 .remarks("All documents verified")
                 .build());
 
+        evictApplicationCache();
+
         log.info("Application {} status updated to DOCS_VERIFIED via RabbitMQ event", appId);
+    }
+
+    private void evictApplicationCache() {
+        Cache cache = cacheManager.getCache("applications-cache");
+        if (cache != null) {
+            cache.clear();
+        }
     }
 }

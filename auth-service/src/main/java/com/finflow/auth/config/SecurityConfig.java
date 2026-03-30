@@ -61,7 +61,8 @@ public class SecurityConfig {
                 ).permitAll()
                 .anyRequest().authenticated()
             )
-            .authenticationProvider(authenticationProvider());
+            .authenticationProvider(authenticationProvider())
+            .addFilterBefore(new RequestHeaderAuthenticationFilter(), org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

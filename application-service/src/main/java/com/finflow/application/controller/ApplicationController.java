@@ -1,19 +1,23 @@
 package com.finflow.application.controller;
 
 import com.finflow.application.dto.*;
-import com.finflow.application.entity.*;
+import com.finflow.application.entity.ApplicantPersonalDetails;
+import com.finflow.application.entity.EmploymentDetails;
+import com.finflow.application.entity.LoanDetails;
 import com.finflow.application.mapper.ApplicationMapper;
 import com.finflow.application.service.ApplicationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -36,26 +40,74 @@ public class ApplicationController {
 
     @PutMapping("/{id}/personal")
     @PreAuthorize("hasRole('APPLICANT')")
-    @Operation(summary = "Save personal details")
+    @Operation(summary = "Save or replace personal details")
     public ResponseEntity<PersonalDetailsResponse> savePersonal(
-            @PathVariable Long id, @RequestBody ApplicantPersonalDetails details) {
-        return ResponseEntity.ok(mapper.toResponse(applicationService.savePersonalDetails(id, details)));
+            @PathVariable Long id,
+            @Valid @RequestBody ApplicantPersonalDetails details,
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
+        return ResponseEntity.ok(mapper.toResponse(
+                applicationService.savePersonalDetails(id, userId, roles, details)));
+    }
+
+    @PatchMapping("/{id}/personal")
+    @PreAuthorize("hasRole('APPLICANT')")
+    @Operation(summary = "Partially update personal details")
+    public ResponseEntity<PersonalDetailsResponse> patchPersonal(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> updates,
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
+        return ResponseEntity.ok(mapper.toResponse(
+                applicationService.patchPersonalDetails(id, userId, roles, updates)));
     }
 
     @PutMapping("/{id}/employment")
     @PreAuthorize("hasRole('APPLICANT')")
-    @Operation(summary = "Save employment details")
+    @Operation(summary = "Save or replace employment details")
     public ResponseEntity<EmploymentDetailsResponse> saveEmployment(
-            @PathVariable Long id, @RequestBody EmploymentDetails details) {
-        return ResponseEntity.ok(mapper.toResponse(applicationService.saveEmploymentDetails(id, details)));
+            @PathVariable Long id,
+            @Valid @RequestBody EmploymentDetails details,
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
+        return ResponseEntity.ok(mapper.toResponse(
+                applicationService.saveEmploymentDetails(id, userId, roles, details)));
+    }
+
+    @PatchMapping("/{id}/employment")
+    @PreAuthorize("hasRole('APPLICANT')")
+    @Operation(summary = "Partially update employment details")
+    public ResponseEntity<EmploymentDetailsResponse> patchEmployment(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> updates,
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
+        return ResponseEntity.ok(mapper.toResponse(
+                applicationService.patchEmploymentDetails(id, userId, roles, updates)));
     }
 
     @PutMapping("/{id}/loan-details")
     @PreAuthorize("hasRole('APPLICANT')")
-    @Operation(summary = "Save loan details")
+    @Operation(summary = "Save or replace loan details")
     public ResponseEntity<LoanDetailsResponse> saveLoanDetails(
-            @PathVariable Long id, @RequestBody LoanDetails details) {
-        return ResponseEntity.ok(mapper.toResponse(applicationService.saveLoanDetails(id, details)));
+            @PathVariable Long id,
+            @Valid @RequestBody LoanDetails details,
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
+        return ResponseEntity.ok(mapper.toResponse(
+                applicationService.saveLoanDetails(id, userId, roles, details)));
+    }
+
+    @PatchMapping("/{id}/loan-details")
+    @PreAuthorize("hasRole('APPLICANT')")
+    @Operation(summary = "Partially update loan details")
+    public ResponseEntity<LoanDetailsResponse> patchLoanDetails(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> updates,
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
+        return ResponseEntity.ok(mapper.toResponse(
+                applicationService.patchLoanDetails(id, userId, roles, updates)));
     }
 
     @PostMapping("/{id}/submit")
@@ -63,8 +115,9 @@ public class ApplicationController {
     @Operation(summary = "Submit a draft application (triggers RabbitMQ event)")
     public ResponseEntity<LoanApplicationResponse> submit(
             @PathVariable Long id,
-            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId) {
-        return ResponseEntity.ok(mapper.toResponse(applicationService.submitApplication(id, userId)));
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
+        return ResponseEntity.ok(mapper.toResponse(applicationService.submitApplication(id, userId, roles)));
     }
 
     @GetMapping("/{id}")
@@ -88,28 +141,30 @@ public class ApplicationController {
     @GetMapping("/my")
     @PreAuthorize("hasRole('APPLICANT')")
     @Operation(summary = "Get all applications for logged-in user")
-    public ResponseEntity<List<LoanApplicationResponse>> getMyApplications(
-            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long applicantId) {
-        return ResponseEntity.ok(mapper.toResponseList(applicationService.getApplicationsByApplicant(applicantId)));
+    public ResponseEntity<Page<LoanApplicationResponse>> getMyApplications(
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long applicantId,
+            Pageable pageable) {
+        return ResponseEntity.ok(
+                applicationService.getApplicationsByApplicant(applicantId, pageable).map(mapper::toResponse));
     }
 
     @GetMapping
     @Operation(summary = "Get all applications")
-    public ResponseEntity<List<LoanApplicationResponse>> getAllApplications(
-            @Parameter(hidden = true) @RequestHeader(value = "X-User-Roles", required = false) String roles) {
-        return ResponseEntity.ok(mapper.toResponseList(applicationService.getAllApplications(roles)));
+    public ResponseEntity<Page<LoanApplicationResponse>> getAllApplications(
+            @Parameter(hidden = true) @RequestHeader(value = "X-User-Roles", required = false) String roles,
+            Pageable pageable) {
+        return ResponseEntity.ok(applicationService.getAllApplications(roles, pageable).map(mapper::toResponse));
     }
 
-    @PutMapping("/{id}/status")
-    @Operation(summary = "Update application status (internal / Admin use)")
-    public ResponseEntity<LoanApplicationResponse> updateStatus(
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('APPLICANT')")
+    @Operation(summary = "Soft delete an application owned by the logged-in applicant")
+    public ResponseEntity<Void> deleteApplication(
             @PathVariable Long id,
-            @RequestParam String toStatus,
-            @RequestParam String remarks,
             @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
             @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
-        return ResponseEntity.ok(mapper.toResponse(
-                applicationService.updateStatus(id, toStatus, userId, roles, remarks)));
+        applicationService.softDeleteApplication(id, userId, roles);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/internal/reports")

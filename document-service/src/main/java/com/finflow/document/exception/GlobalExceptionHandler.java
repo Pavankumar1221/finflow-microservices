@@ -10,6 +10,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 @RestControllerAdvice
 @Slf4j
@@ -19,6 +20,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalState(IllegalStateException ex) {
         log.warn("Resource state error: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of("timestamp", LocalDateTime.now().toString(),
+                             "status", 404, "message", ex.getMessage()));
+    }
+
+    @ExceptionHandler(NoSuchElementException.class)
+    public ResponseEntity<Map<String, Object>> handleNotFound(NoSuchElementException ex) {
+        log.warn("Resource not found: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(Map.of("timestamp", LocalDateTime.now().toString(),
                              "status", 404, "message", ex.getMessage()));

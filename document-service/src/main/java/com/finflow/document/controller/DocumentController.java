@@ -17,7 +17,16 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -34,10 +43,6 @@ public class DocumentController {
     private final DocumentService documentService;
     private final DocumentMapper mapper;
 
-    // ────────────────────────────────────────────────────────────────────────────
-    // Upload
-    // ────────────────────────────────────────────────────────────────────────────
-
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasRole('APPLICANT')")
     @Operation(summary = "Upload a document for a loan application")
@@ -51,10 +56,6 @@ public class DocumentController {
                 .body(mapper.toResponse(
                         documentService.uploadDocument(applicationId, userId, roles, documentType, file)));
     }
-
-    // ────────────────────────────────────────────────────────────────────────────
-    // Retrieve metadata
-    // ────────────────────────────────────────────────────────────────────────────
 
     @GetMapping("/application/{applicationId}")
     @PreAuthorize("hasAnyRole('APPLICANT', 'ADMIN')")
@@ -87,69 +88,25 @@ public class DocumentController {
         return ResponseEntity.ok(mapper.toResponse(documentService.getDocument(id, userId, roles)));
     }
 
-    // ────────────────────────────────────────────────────────────────────────────
-    // View / Download file  (NEW)
-    // ────────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Serves the actual uploaded file directly so an admin can inspect it
-     * in the browser before accepting or rejecting.
-     *
-     * Content-Disposition is set to "inline" so PDFs/images open in-browser
-     * rather than triggering a file download prompt.
-     *
-     * Access is secured (requires JWT) — only reaches here via the gateway.
-     */
     @GetMapping("/{id}/view")
-    @Operation(summary = "View / download the actual document file (Admin use)")
+    @PreAuthorize("hasAnyRole('APPLICANT', 'ADMIN')")
+    @Operation(summary = "View the actual document file inline in the browser")
     public ResponseEntity<Resource> viewDocument(
             @PathVariable Long id,
             @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
-            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
-        try {
-            Document doc      = documentService.getDocument(id, userId, roles);
-            Resource resource = documentService.getFileForViewing(id, userId, roles);
-
-            // Resolve MIME type — fall back to octet-stream if unknown
-            String mimeType = (doc.getMimeType() != null && !doc.getMimeType().isBlank())
-                    ? doc.getMimeType()
-                    : MediaType.APPLICATION_OCTET_STREAM_VALUE;
-
-            MediaType mediaType;
-            try {
-                mediaType = MediaType.parseMediaType(mimeType);
-            } catch (Exception ex) {
-                log.warn("Unrecognised MIME type '{}' for doc {}. Falling back to octet-stream.", mimeType, id);
-                mediaType = MediaType.APPLICATION_OCTET_STREAM;
-            }
-
-            // "inline" → opens in browser. Change to "attachment" to force download.
-            ContentDisposition disposition = ContentDisposition.inline()
-                    .filename(doc.getFileName() != null ? doc.getFileName() : "document")
-                    .build();
-
-            return ResponseEntity.ok()
-                    .contentType(mediaType)
-                    .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
-                    .body(resource);
-
-        } catch (RuntimeException ex) {
-            // Covers: document not found in DB AND file missing on disk
-            log.warn("Document {} not accessible: {}", id, ex.getMessage());
-            HttpStatus status = (ex instanceof IllegalStateException)
-                    ? HttpStatus.INTERNAL_SERVER_ERROR   // found in DB but missing on disk
-                    : HttpStatus.NOT_FOUND;              // not in DB at all
-            return ResponseEntity.status(status).build();
-
-        } catch (IOException ex) {
-            log.error("IO error reading file for document {}: {}", id, ex.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
-        }
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) throws IOException {
+        return buildFileResponse(id, userId, roles, true);
     }
 
-    // ────────────────────────────────────────────────────────────────────────────
-    // Internal Status Update
-    // ────────────────────────────────────────────────────────────────────────────
+    @GetMapping("/{id}/download")
+    @PreAuthorize("hasAnyRole('APPLICANT', 'ADMIN')")
+    @Operation(summary = "Download the actual document file as an attachment")
+    public ResponseEntity<Resource> downloadDocument(
+            @PathVariable Long id,
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) throws IOException {
+        return buildFileResponse(id, userId, roles, false);
+    }
 
     @PutMapping("/internal/{id}/status")
     @Operation(summary = "Internal: Update document status", hidden = true)
@@ -163,16 +120,9 @@ public class DocumentController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
 
-        String statusStr = body.get("status");
-        String remarks = body.get("remarks");
-
         return ResponseEntity.ok(mapper.toResponse(
-                documentService.updateInternalStatus(id, statusStr, remarks, userId)));
+                documentService.updateInternalStatus(id, body.get("status"), body.get("remarks"), userId)));
     }
-
-    // ────────────────────────────────────────────────────────────────────────────
-    // History
-    // ────────────────────────────────────────────────────────────────────────────
 
     @GetMapping("/{id}/history")
     @PreAuthorize("hasAnyRole('APPLICANT', 'ADMIN')")
@@ -183,5 +133,43 @@ public class DocumentController {
             @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) {
         return ResponseEntity.ok(mapper.toHistoryList(
                 documentService.getVerificationHistory(id, userId, roles)));
+    }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('APPLICANT')")
+    @Operation(summary = "Delete a specific document owned by the logged-in applicant")
+    public ResponseEntity<Void> deleteDocument(
+            @PathVariable Long id,
+            @Parameter(hidden = true) @RequestHeader("X-User-Id") Long userId,
+            @Parameter(hidden = true) @RequestHeader("X-User-Roles") String roles) throws IOException {
+        documentService.deleteDocument(id, userId, roles);
+        return ResponseEntity.noContent().build();
+    }
+
+    private ResponseEntity<Resource> buildFileResponse(Long id, Long userId, String roles, boolean inline)
+            throws IOException {
+        Document doc = documentService.getDocument(id, userId, roles);
+        Resource resource = documentService.getFileForViewing(id, userId, roles);
+
+        String mimeType = (doc.getMimeType() != null && !doc.getMimeType().isBlank())
+                ? doc.getMimeType()
+                : MediaType.APPLICATION_OCTET_STREAM_VALUE;
+
+        MediaType mediaType;
+        try {
+            mediaType = MediaType.parseMediaType(mimeType);
+        } catch (Exception ex) {
+            log.warn("Unrecognised MIME type '{}' for doc {}. Falling back to octet-stream.", mimeType, id);
+            mediaType = MediaType.APPLICATION_OCTET_STREAM;
+        }
+
+        ContentDisposition disposition = inline
+                ? ContentDisposition.inline().filename(doc.getFileName() != null ? doc.getFileName() : "document").build()
+                : ContentDisposition.attachment().filename(doc.getFileName() != null ? doc.getFileName() : "document").build();
+
+        return ResponseEntity.ok()
+                .contentType(mediaType)
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+                .body(resource);
     }
 }

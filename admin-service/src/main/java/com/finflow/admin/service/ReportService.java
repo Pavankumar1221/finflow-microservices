@@ -16,6 +16,7 @@ public class ReportService {
 
     @CircuitBreaker(name = "applicationServiceCB", fallbackMethod = "getAggregatedReportsFallback")
     @Retry(name = "applicationServiceCB")
+    @org.springframework.cache.annotation.Cacheable(value = "reports-cache")
     public Map<String, Object> getAggregatedReports() {
         return applicationClient.getReports("admin-service");
     }

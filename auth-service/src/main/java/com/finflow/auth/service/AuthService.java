@@ -1,8 +1,10 @@
 package com.finflow.auth.service;
 
 import com.finflow.auth.dto.AuthResponse;
+import com.finflow.auth.dto.ChangePasswordRequest;
 import com.finflow.auth.dto.LoginRequest;
 import com.finflow.auth.dto.RegisterRequest;
+import com.finflow.auth.dto.TokenStatusRequest;
 import com.finflow.auth.dto.UserResponse;
 import com.finflow.auth.entity.Role;
 import com.finflow.auth.entity.User;
@@ -20,8 +22,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.stream.Collectors;
 
 @Service
@@ -36,6 +38,7 @@ public class AuthService {
     private final JwtUtil jwtUtil;
     private final AuthenticationManager authenticationManager;
     private final UserDetailsService userDetailsService;
+    private final TokenBlacklistService tokenBlacklistService;
 
     public UserResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
@@ -89,10 +92,16 @@ public class AuthService {
     }
 
     @Transactional(readOnly = true)
-    public UserResponse getUserById(Long userId) {
+    @org.springframework.cache.annotation.Cacheable(value = "users-cache", key = "#userId")
+    public UserResponse getMyProfile(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+                .orElseThrow(() -> new NoSuchElementException("User not found with id: " + userId));
         return toUserResponse(user);
+    }
+
+    @Transactional(readOnly = true)
+    public UserResponse getUserById(Long userId) {
+        return getMyProfile(userId);
     }
 
     @Transactional(readOnly = true)
@@ -106,6 +115,22 @@ public class AuthService {
         )).collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
+    public Map<String, Object> getUserInternal(Long id) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("User not found with id: " + id));
+
+        return Map.of(
+                "id", user.getId(),
+                "fullName", user.getFullName(),
+                "email", user.getEmail(),
+                "mobileNumber", user.getMobileNumber(),
+                "status", user.getStatus().name(),
+                "roles", user.getRoles().stream().map(Role::getRoleName).collect(Collectors.toList())
+        );
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "users-cache", key = "#id")
     public Map<String, Object> updateUserInternal(Long id, Map<String, Object> req) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("User not found"));
@@ -128,6 +153,43 @@ public class AuthService {
                 "status", saved.getStatus().name(),
                 "roles", saved.getRoles().stream().map(Role::getRoleName).collect(Collectors.toList())
         );
+    }
+
+    @org.springframework.cache.annotation.CacheEvict(value = "users-cache", key = "#userId")
+    public Map<String, Object> changePassword(Long userId, ChangePasswordRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NoSuchElementException("User not found with id: " + userId));
+
+        if (!passwordEncoder.matches(request.getOldPassword(), user.getPasswordHash())) {
+            throw new RuntimeException("Old password is incorrect");
+        }
+        if (request.getOldPassword().equals(request.getNewPassword())) {
+            throw new RuntimeException("New password must be different from old password");
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
+        userRepository.save(user);
+
+        log.info("Password changed for user {}", user.getEmail());
+        return Map.of("message", "Password changed successfully");
+    }
+
+    public Map<String, Object> logout(String authHeader) {
+        String token = extractBearerToken(authHeader);
+        tokenBlacklistService.blacklist(token, jwtUtil.extractExpiration(token));
+        return Map.of("message", "Logged out successfully");
+    }
+
+    public Map<String, Object> isTokenBlacklisted(TokenStatusRequest request) {
+        boolean blacklisted = tokenBlacklistService.isBlacklisted(request.getToken());
+        return Map.of("blacklisted", blacklisted);
+    }
+
+    private String extractBearerToken(String authHeader) {
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            throw new RuntimeException("Authorization header must be 'Bearer <token>'");
+        }
+        return authHeader.substring(7).trim();
     }
 
     private UserResponse toUserResponse(User user) {

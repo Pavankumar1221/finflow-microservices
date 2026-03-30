@@ -1,21 +1,24 @@
 package com.finflow.document.service;
 
 import com.finflow.document.config.RabbitMQConfig;
+import com.finflow.document.entity.AllowedDocumentType;
 import com.finflow.document.entity.Document;
 import com.finflow.document.entity.Document.VerificationStatus;
-import com.finflow.document.entity.AllowedDocumentType;
 import com.finflow.document.entity.DocumentVerificationHistory;
 import com.finflow.document.exception.AccessDeniedException;
 import com.finflow.document.feign.ApplicationServiceClient;
+import com.finflow.document.feign.AuthServiceClient;
 import com.finflow.document.repository.DocumentRepository;
 import com.finflow.document.repository.DocumentVerificationHistoryRepository;
 import feign.FeignException;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -28,6 +31,7 @@ import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.UUID;
 
 @Service
@@ -40,16 +44,17 @@ public class DocumentService {
     private final DocumentVerificationHistoryRepository historyRepository;
     private final RabbitTemplate rabbitTemplate;
     private final ApplicationServiceClient applicationClient;
+    private final AuthServiceClient authServiceClient;
+    private final NotificationEmailService notificationEmailService;
 
     @Value("${document.upload.path}")
     private String uploadPath;
 
     @CircuitBreaker(name = "applicationServiceCB", fallbackMethod = "uploadDocumentFallback")
     @Retry(name = "applicationServiceCB")
+    @org.springframework.cache.annotation.CacheEvict(value = "documents-cache", allEntries = true)
     public Document uploadDocument(Long applicationId, Long uploadedBy, String roles,
                                    String documentType, MultipartFile file) throws IOException {
-        
-        // 1. Validate Type
         AllowedDocumentType type;
         try {
             type = AllowedDocumentType.valueOf(documentType.toUpperCase());
@@ -57,22 +62,17 @@ public class DocumentService {
             throw new IllegalArgumentException("Invalid document type");
         }
 
-        // 2. Ownership verification
         if (uploadedBy == null || roles == null) {
             throw new AccessDeniedException("Missing authentication headers");
         }
         if (roles.contains("ROLE_ADMIN")) {
             throw new AccessDeniedException("Admins cannot upload documents");
         }
-        try {
-            applicationClient.getApplication(applicationId, uploadedBy, roles);
-        } catch (FeignException.Forbidden e) {
-            throw new AccessDeniedException("You do not own this application");
-        } catch (FeignException.NotFound e) {
-            throw new IllegalArgumentException("Application not found");
-        }
 
-        java.util.Optional<Document> existingOpt = documentRepository.findByApplicationIdAndDocumentType(applicationId, type.name());
+        validateAccess(applicationId, uploadedBy, roles);
+
+        java.util.Optional<Document> existingOpt =
+                documentRepository.findByApplicationIdAndDocumentType(applicationId, type.name());
 
         Path uploadDir = Paths.get(uploadPath, String.valueOf(applicationId));
         Files.createDirectories(uploadDir);
@@ -84,11 +84,15 @@ public class DocumentService {
         Document doc;
         if (existingOpt.isPresent()) {
             doc = existingOpt.get();
+            deleteFileIfExists(doc.getFilePath());
+
             historyRepository.save(DocumentVerificationHistory.builder()
-                .documentId(doc.getId()).verifiedBy(uploadedBy)
-                .status(VerificationStatus.PENDING).remarks("Replaced document file")
-                .build());
-            
+                    .documentId(doc.getId())
+                    .verifiedBy(uploadedBy)
+                    .status(VerificationStatus.PENDING)
+                    .remarks("Replaced document file")
+                    .build());
+
             doc.setFileName(file.getOriginalFilename());
             doc.setFilePath(filePath.toString());
             doc.setMimeType(file.getContentType());
@@ -96,10 +100,10 @@ public class DocumentService {
             doc.setVerificationStatus(VerificationStatus.PENDING);
             doc.setUploadedAt(LocalDateTime.now());
         } else {
-            // 4. Throttle limit
             if (documentRepository.countByApplicationId(applicationId) >= 3) {
                 throw new IllegalArgumentException("All required documents already uploaded");
             }
+
             doc = Document.builder()
                     .applicationId(applicationId)
                     .uploadedBy(uploadedBy)
@@ -133,12 +137,11 @@ public class DocumentService {
         if (roles.contains("ROLE_ADMIN")) {
             return;
         }
+
         try {
             applicationClient.getApplication(applicationId, userId, roles);
-        } catch (FeignException.Forbidden e) {
+        } catch (FeignException.Forbidden | FeignException.NotFound e) {
             throw new AccessDeniedException("Access Denied: You do not own this application");
-        } catch (FeignException.NotFound e) {
-            throw new IllegalArgumentException("Application not found");
         }
     }
 
@@ -148,6 +151,7 @@ public class DocumentService {
     }
 
     @Transactional(readOnly = true)
+    @org.springframework.cache.annotation.Cacheable(value = "documents-cache", key = "'app-' + #applicationId")
     public List<Document> getDocumentsByApplication(Long applicationId, Long userId, String roles) {
         validateAccess(applicationId, userId, roles);
         return documentRepository.findByApplicationId(applicationId);
@@ -156,22 +160,28 @@ public class DocumentService {
     @Transactional(readOnly = true)
     public Map<String, List<String>> getRequiredDocumentsStatus(Long applicationId, Long userId, String roles) {
         validateAccess(applicationId, userId, roles);
-        List<String> required = Arrays.asList(AllowedDocumentType.AADHAR.name(), AllowedDocumentType.PAN.name(), AllowedDocumentType.INCOME.name());
+        List<String> required = Arrays.asList(
+                AllowedDocumentType.AADHAR.name(),
+                AllowedDocumentType.PAN.name(),
+                AllowedDocumentType.INCOME.name());
         List<String> uploaded = documentRepository.findByApplicationId(applicationId)
-                .stream().map(Document::getDocumentType).toList();
-        List<String> pending = required.stream().filter(t -> !uploaded.contains(t)).toList();
-        
+                .stream()
+                .map(Document::getDocumentType)
+                .toList();
+        List<String> pending = required.stream().filter(type -> !uploaded.contains(type)).toList();
+
         return Map.of(
-            "required", required,
-            "uploaded", uploaded,
-            "pending", pending
+                "required", required,
+                "uploaded", uploaded,
+                "pending", pending
         );
     }
 
     @Transactional(readOnly = true)
+    @org.springframework.cache.annotation.Cacheable(value = "documents-cache", key = "#documentId")
     public Document getDocumentById(Long documentId) {
         return documentRepository.findById(documentId)
-                .orElseThrow(() -> new RuntimeException("Document not found: " + documentId));
+                .orElseThrow(() -> new NoSuchElementException("Document not found: " + documentId));
     }
 
     public void validateDocumentAccess(Long documentId, Long userId, String roles) {
@@ -198,18 +208,9 @@ public class DocumentService {
         return historyRepository.findByDocumentIdOrderByVerifiedAtDesc(documentId);
     }
 
-    /**
-     * Loads the physical file from disk for inline viewing / download.
-     *
-     * @param documentId  the DB id of the document record
-     * @return            the file as an InputStreamResource ready to stream to the client
-     * @throws IOException        if the file cannot be read from disk
-     * @throws RuntimeException   if the document record is not found in the DB
-     * @throws IllegalStateException if the file path recorded in the DB no longer exists on disk
-     */
     @Transactional(readOnly = true)
-    public org.springframework.core.io.Resource getFileForViewing(Long documentId, Long userId, String roles) throws IOException {
-        Document doc = getDocument(documentId, userId, roles);   // throws 404 if not in DB
+    public Resource getFileForViewing(Long documentId, Long userId, String roles) throws IOException {
+        Document doc = getDocument(documentId, userId, roles);
 
         Path filePath = Paths.get(doc.getFilePath());
         if (!Files.exists(filePath)) {
@@ -218,9 +219,10 @@ public class DocumentService {
         }
 
         log.info("Serving document {} ({}): {}", documentId, doc.getDocumentType(), filePath.getFileName());
-        return new org.springframework.core.io.UrlResource(filePath.toUri());
+        return new UrlResource(filePath.toUri());
     }
 
+    @org.springframework.cache.annotation.CacheEvict(value = "documents-cache", allEntries = true)
     public Document updateInternalStatus(Long documentId, String statusStr, String remarks, Long verifiedBy) {
         if (documentId == null || statusStr == null) {
             throw new IllegalArgumentException("Document ID and status cannot be null");
@@ -239,15 +241,21 @@ public class DocumentService {
             log.info("Document {} is already {}. Skipping duplicate update.", documentId, status);
             return doc;
         }
-        
+
         doc.setVerificationStatus(status);
         doc.setVerifiedAt(LocalDateTime.now());
         Document saved = documentRepository.save(doc);
 
         historyRepository.save(DocumentVerificationHistory.builder()
-                .documentId(documentId).verifiedBy(verifiedBy)
-                .status(status).remarks(remarks)
+                .documentId(documentId)
+                .verifiedBy(verifiedBy)
+                .status(status)
+                .remarks(remarks)
                 .build());
+
+        if (status == VerificationStatus.VERIFIED || status == VerificationStatus.REJECTED) {
+            sendDocumentNotification(doc, remarks);
+        }
 
         if (status == VerificationStatus.VERIFIED) {
             checkAndPublishAllVerified(doc.getApplicationId());
@@ -256,10 +264,21 @@ public class DocumentService {
         return saved;
     }
 
+    @org.springframework.cache.annotation.CacheEvict(value = "documents-cache", allEntries = true)
+    public void deleteDocument(Long documentId, Long userId, String roles) throws IOException {
+        requireApplicantRole(roles);
+
+        Document doc = getDocument(documentId, userId, roles);
+        deleteFileIfExists(doc.getFilePath());
+        historyRepository.deleteByDocumentId(documentId);
+        documentRepository.delete(doc);
+        log.info("Document {} deleted by user {}", documentId, userId);
+    }
+
     private void checkAndPublishAllVerified(Long applicationId) {
         List<Document> docs = documentRepository.findByApplicationId(applicationId);
         boolean allVerified = docs.stream()
-                .allMatch(d -> d.getVerificationStatus() == VerificationStatus.VERIFIED);
+                .allMatch(document -> document.getVerificationStatus() == VerificationStatus.VERIFIED);
 
         if (allVerified && !docs.isEmpty()) {
             Map<String, Object> event = Map.of(
@@ -269,6 +288,33 @@ public class DocumentService {
             );
             rabbitTemplate.convertAndSend(RabbitMQConfig.DOC_EXCHANGE, RabbitMQConfig.DOC_VERIFIED_ROUTING, event);
             log.info("All documents verified for application {}. Event published.", applicationId);
+        }
+    }
+
+    private void requireApplicantRole(String roles) {
+        if (roles == null || !roles.contains("ROLE_APPLICANT")) {
+            throw new AccessDeniedException("Only applicants can delete documents");
+        }
+    }
+
+    private void deleteFileIfExists(String filePath) throws IOException {
+        if (filePath == null || filePath.isBlank()) {
+            return;
+        }
+
+        Path path = Paths.get(filePath);
+        if (Files.exists(path)) {
+            Files.delete(path);
+        }
+    }
+
+    private void sendDocumentNotification(Document doc, String remarks) {
+        try {
+            Map<String, Object> user = authServiceClient.getUser(doc.getUploadedBy(), "document-service");
+            notificationEmailService.sendDocumentStatusEmailQuietly(user, doc, remarks);
+        } catch (Exception ex) {
+            log.warn("Could not prepare document notification email for document {}: {}",
+                    doc.getId(), ex.getMessage());
         }
     }
 }
