@@ -55,17 +55,17 @@ CREATE DATABASE IF NOT EXISTS finflow_admin;
 
 -- NOTE: User 'pavan' already exists on your MySQL.
 -- Just grant permissions to all 4 databases:
-GRANT ALL PRIVILEGES ON finflow_auth.*        TO 'pavan'@'localhost';
-GRANT ALL PRIVILEGES ON finflow_application.* TO 'pavan'@'localhost';
-GRANT ALL PRIVILEGES ON finflow_document.*    TO 'pavan'@'localhost';
-GRANT ALL PRIVILEGES ON finflow_admin.*       TO 'pavan'@'localhost';
+GRANT ALL PRIVILEGES ON finflow_auth.*        TO 'finflow'@'localhost';
+GRANT ALL PRIVILEGES ON finflow_application.* TO 'finflow'@'localhost';
+GRANT ALL PRIVILEGES ON finflow_document.*    TO 'finflow'@'localhost';
+GRANT ALL PRIVILEGES ON finflow_admin.*       TO 'finflow'@'localhost';
 
 FLUSH PRIVILEGES;
 ```
 
 > If you ever get **"Access denied"**, run this to reset your password:
 > ```sql
-> ALTER USER 'pavan'@'localhost' IDENTIFIED BY 'Pavan@2004';
+> ALTER USER 'pavan'@'localhost' IDENTIFIED BY 'finflow';
 > FLUSH PRIVILEGES;
 > ```
 
@@ -146,7 +146,7 @@ spring:
 The JWT secret is in `api-gateway/src/main/resources/application.yml` and `auth-service/src/main/resources/application.yml`:
 ```yaml
 jwt:
-  secret: finflow_super_secret_key_256_bits_long_for_HS256_2026
+  secret: *************
 ```
 > This **must be identical** in both files. You can change it but keep both in sync.
 
